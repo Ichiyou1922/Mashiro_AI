@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+websockets
+pyaudio
+numpy
+lancedb
+sentence-transformers
+python-dotenv
+
