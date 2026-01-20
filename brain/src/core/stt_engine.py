@@ -24,8 +24,10 @@ class STTEngine:
     
     def transcribe(self, audio_data: np.ndarray) -> str:
         """音声認識"""
-        segments, info = self.stt_model.transcribe(audio_data, beam_size=5)
+        segments, info = self.model(audio_data, beam_size=5)
         text = ""
         for segment in segments:
             text += segment.text
         return text.strip()
+    
+sttEngine = STTEngine("small", "cuda")

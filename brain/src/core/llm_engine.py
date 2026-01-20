@@ -15,12 +15,12 @@ class LLMEngine:
         self.history = [{"role": "system", "content": self.system_prompt}]
         print("LLM 準備完了")
 
-    def generate_response(self, user_text):
+    def generate_stream(self, user_text):
         print("Thinking...")
         self.history.append({"role": "user", "content": user_text})
 
         response = self.llm_model.create_chat_completion(
-            message=self.history,
+            messages=self.history,
             max_tokens=256,
             temperature=0.7,
             stream=True
@@ -28,20 +28,19 @@ class LLMEngine:
 
         # ストリーミングで表示
         full_response = ""
-        print("Mashiro: ", end="", flush=True)
-
         for chunk in response:
             # チャンクからテキストを取り出す
             delta = chunk['choices'][0]['delta']
             if 'content' in delta:
                 content = delta['content']
-                print(content, end="", flush=True)
                 full_response += content
+                yield content
 
-        print()
-        self.history.append({"role": "Mashiro", "content": full_response})
-        yield full_response
+        self.history.append({"role": "assistant", "content": full_response})
     
     def clear_memory(self):
         print("Clearing History")
         self.history.clear()
+
+
+llmEngine = LLMEngine(2048)

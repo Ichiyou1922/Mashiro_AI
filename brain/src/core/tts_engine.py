@@ -1,10 +1,10 @@
 import requests
-import io
+
 
 class TTSEngine:
-    def __init__(self, URL, talkerId):
-        self.URL="http://localhost:50021"
-        self.talkerId=talkerId
+    def __init__(self, host="localhost", port=50021, speaker_id=14):
+        self.base_url = f"http://{host}:{port}"
+        self.speaker_id = speaker_id
 
     def synthesize(self, text) -> bytes:
         """音声合成"""
@@ -29,8 +29,10 @@ class TTSEngine:
             )
             if r.status_code != 200:
                 print(f"Voicevox Error (Synthesis): {r.text}")
-            return io.ByteIO(r.content)
+            return r.content
 
         except Exception as e:
             print(f"TTS Error: {e}")
             print("Docker VoiceVoxが起動しているかチェック！")
+
+ttsEngine = TTSEngine("http://localhost:50021", 14)

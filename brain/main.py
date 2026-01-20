@@ -2,7 +2,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from contextlib import asynccontextmanager
 import torch
 from brain.src.utils.audio_stream import ConversationSession
-from silero_vad import load_silero_vad, get_speech_timestamps
+
 
 # グローバル変数
 ml_models = {}
