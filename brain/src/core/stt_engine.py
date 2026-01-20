@@ -30,4 +30,3 @@ class STTEngine:
             text += segment.text
         return text.strip()
     
-sttEngine = STTEngine("small", "cuda")

@@ -35,4 +35,3 @@ class TTSEngine:
             print(f"TTS Error: {e}")
             print("Docker VoiceVoxが起動しているかチェック！")
 
-ttsEngine = TTSEngine("http://localhost:50021", 14)

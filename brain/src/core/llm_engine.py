@@ -43,4 +43,3 @@ class LLMEngine:
         self.history.clear()
 
 
-llmEngine = LLMEngine(2048)
