@@ -6,4 +6,6 @@ numpy
 lancedb
 sentence-transformers
 python-dotenv
-
+sounddevice
+scipy
+faster_whisper
