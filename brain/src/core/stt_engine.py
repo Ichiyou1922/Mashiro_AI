@@ -7,12 +7,11 @@ class STTEngine:
         print("Loading VAD Model")
         torch.set_num_threads(1)
         
-        self.vad_model, utils = torch.hub.load(
+        self.vad_model = torch.hub.load(
             repo_or_dir='snakers4/silero-vad',
             model='silero_vad',
             trust_repo=True # 警告対策
         )
-        (get_speech_timestamps, _, _, _, _) = utils
         print(f"Loading Whisper Model ({model_size}...)")
         self.model = WhisperModel(model_size, device, compute_type="float16")
 

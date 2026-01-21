@@ -9,3 +9,4 @@ python-dotenv
 sounddevice
 scipy
 faster_whisper
+discord.py[voice]
