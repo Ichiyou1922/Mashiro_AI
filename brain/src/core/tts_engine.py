@@ -6,24 +6,24 @@ class TTSEngine:
         self.base_url = f"http://{host}:{port}"
         self.speaker_id = speaker_id
 
-    def synthesize(self, text) -> bytes:
+    def synthesize(self, text):
         """音声合成"""
         if not text:
             return  
         print("Synthesizing...")
         try:
-            query_payload = {"text": text, "speaker": self.talkerId}
-            r = requests.post(f"{self.URL}/audio_query", params=query_payload)
+            query_payload = {"text": text, "speaker": self.speaker_id}
+            r = requests.post(f"{self.base_url}/audio_query", params=query_payload)
             if r.status_code != 200:
                 print(f"Voicevox Error (Query): {r.text}")
                 return
             query_data = r.json()
              
             # 音声を合成
-            synthesis_payload = {"speaker": self.talkerId}
+            synthesis_payload = {"speaker": self.speaker_id}
             # query_dataはJSONとしてBodyに含める
             r = requests.post(
-                f"{self.URL}/synthesis",
+                f"{self.base_url}/synthesis",
                 params=synthesis_payload,
                 json=query_data
             )

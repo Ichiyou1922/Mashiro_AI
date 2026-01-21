@@ -14,7 +14,7 @@ app = FastAPI()
 # 起動時に一度だけロード
 print("サーバー起動中...モデルロード")
 stt = STTEngine()
-llm = LLMEngine(2048)
+llm = LLMEngine(4096)
 tts = TTSEngine()
 print("モデルロード完了")
 

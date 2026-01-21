@@ -33,9 +33,10 @@ try:
 
         # バイナリデータをnumpy配列に変換
         audio_data = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        tensor_data = torch.from_numpy(audio_data) # 間違ってるかもしれない
 
         # Silero VADで音声活動を判定
-        speech_timestamps = get_speech_timestamps(audio_data, model, sampling_rate=RATE)
+        speech_timestamps = get_speech_timestamps(tensor_data, model, sampling_rate=RATE) # ここのtensor_dataはもともとaudio_data
 
         if speech_timestamps:
             # 音声が検出された場合

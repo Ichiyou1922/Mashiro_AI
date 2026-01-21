@@ -35,7 +35,6 @@ class LLMEngine:
                 content = delta['content']
                 full_response += content
                 yield content
-
         self.history.append({"role": "assistant", "content": full_response})
     
     def clear_memory(self):
