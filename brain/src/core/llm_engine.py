@@ -45,7 +45,19 @@ class LLMEngine:
                 yield content
         self.history.append({"role": "assistant", "content": full_response})
         
-        # return response['choices'][0]['message']['content']
+    def generate(self, user_text: str):
+        print("Thinking...")
+        self.history.append({"role": "user", "content": user_text})
+
+        response = self.llm_model.create_chat_completion(
+            messages=cast(List[Any], self.history),
+            max_tokens=256,
+            temperature=0.7,
+            stream=False
+        )
+        answer_text = response['choices'][0]['message']['content']
+        self.history.append({"role": "assistant", "content": answer_text})
+        return answer_text
         
     
     def clear_memory(self):
