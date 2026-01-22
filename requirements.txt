@@ -1,12 +1,34 @@
-fastapi
-uvicorn[standard]
-websockets
-pyaudio
-numpy
-lancedb
-sentence-transformers
-python-dotenv
-sounddevice
-scipy
-faster_whisper
-discord.py[voice]
+# Core Dependencies
+torch==2.7.1
+torchaudio==2.7.1
+torchvision==0.22.1
+
+# Speech Recognition & Processing
+faster_whisper>=0.10.0
+numpy>=1.24.0
+scipy>=1.10.0
+sounddevice>=0.4.6
+
+# Discord
+discord.py[voice]>=2.3.0
+discord-ext-voice-recv>=0.0.6
+PyNaCl>=1.5.0
+
+# Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+
+# Database & ML
+lancedb>=0.1.0
+sentence-transformers>=2.2.0
+
+# LLM
+llama-cpp-python>=0.2.0
+
+# Audio
+pyaudio>=0.2.13
+
+# Utilities
+python-dotenv>=1.0.0
+requests>=2.31.0
