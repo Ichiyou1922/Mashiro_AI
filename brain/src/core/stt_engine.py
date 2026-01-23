@@ -7,7 +7,7 @@ class STTEngine:
     def __init__(self, model_size="small", device="cuda"):
         print("Loading VAD Model")
 
-        # devicdを探索する
+        # deviceを探索する
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
         else:
@@ -65,8 +65,9 @@ class STTEngine:
         tensor_mono = tensor_mono.unsqueeze(0)
         # デバイスに移動
         tensor_mono = tensor_mono.to(self.device)
-        resampled_data = self.resampler(tensor_mono)
-        return resampled_data.squeeze()
+        resampled_data: torch.Tensor = self.resampler(tensor_mono)
+        result = resampled_data.squeeze()
+        return result
         
 
     def detect_voice(self, audio_data: torch.Tensor) -> bool:
@@ -84,8 +85,9 @@ class STTEngine:
         return speech_prob > 0.5
     
     # .cpu().numpy()でテンソルを剥がしてndarrayを渡す
-    def transcribe(self, audio_data: np.ndarray) -> str:
+    def transcribe(self, audio_tensor: torch.Tensor) -> str:
         """音声認識"""
+        audio_data = audio_tensor.cpu().numpy()
         segments, info = self.whisper_model.transcribe(audio_data, beam_size=5)
         text = ""
         for segment in segments:
