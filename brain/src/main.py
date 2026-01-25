@@ -10,18 +10,27 @@ import asyncio
 import numpy as np
 import torch
 import time
-import uuid
 import io
+import re
 
 load_dotenv()
 
 token = os.getenv("DISCORD_BOT_TOKEN")
-bot = commands.Bot(command_prefix="", intents=discord.Intents.all())
+bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
 voice_client = None
+reconnect_enabled = True  # 再接続フラグ
 
 stt = STTEngine()
-llm = LLMEngine(4098)
+llm = LLMEngine(2048)
 tts = TTSEngine()
+
+def remove_thoughts(text: str) -> str:
+    # pattern: （思考: 任意の文字）
+    # re.DOTALL: 改行を含めてマッチさせる
+    pattern = r"\（思考:.*?\）"
+    # マッチした部分を空文字で置換
+    cleaned_text = re.sub(pattern, "", text, flags=re.DOTALL)
+    return cleaned_text.strip()
 
 class MyAudioSink(voice_recv.AudioSink):
     def __init__(self, stt_engine: STTEngine, llm_engine: LLMEngine, tts_engine: TTSEngine, vc):
@@ -37,13 +46,10 @@ class MyAudioSink(voice_recv.AudioSink):
         # ユーザーごとの最後にwriteが呼ばれた時刻を記録するためのタスク
         self.bg_task = self.ev_loop.create_task(self.check_silence_loop())
 
-        # LLMのセグフォ対策
-        # アクセスロック ＋ キュ＝（最新のテキストのみ処理）
-        self.current_task_id = None
-        self.llm_lock = asyncio.Lock()
-
         # 音声再生用
         self.vc = vc
+
+        self.is_processing = False
     
     def wants_opus(self) -> bool:
         return False
@@ -52,6 +58,9 @@ class MyAudioSink(voice_recv.AudioSink):
         print("Watchdog started.")
         while True:
             await asyncio.sleep(0.1)
+
+            if self.is_processing:
+                continue
             
             current_time = time.time()
             for user_key in list(self.user_data.keys()):
@@ -64,6 +73,8 @@ class MyAudioSink(voice_recv.AudioSink):
                 silence_duration = current_time - self.user_data[user_key]["last_seen"]
 
                 if silence_duration > 0.5:
+                    self.is_processing = True
+
                     print(f"\nFlash! (Silence: {silence_duration:.2f}s)")
 
                     # Flash処理
@@ -118,7 +129,6 @@ class MyAudioSink(voice_recv.AudioSink):
             self.user_data[user_key]["small_buffer"].append(data.pcm)
             self.user_data[user_key]["tick"] += 1
             
-            
         else:
             # 溜まったbytesを結合してdiscord_to_sileroに渡す
             self.user_data[user_key]["small_buffer"].append(data.pcm)
@@ -128,69 +138,59 @@ class MyAudioSink(voice_recv.AudioSink):
             # VAD判定
             tensor_data: torch.Tensor = self.stt.discord_to_silero(big_buffer)
             
-
             # byte_termから話しているか話していないか判別して分岐
             # 話しているならまた溜める
             # 話していないならLLM->TTSの流れに入る
             if self.stt.detect_voice(tensor_data):
-                print(".", end="", flush=True)
                 self.user_data[user_key]["is_speaking"] = True
                 self.user_data[user_key]["buffer"].append(big_buffer)
-                
-                
 
             elif self.user_data[user_key]["is_speaking"]:
                 self.user_data[user_key]["buffer"].append(big_buffer)
 
     async def process_conversation(self, user_key, raw_bytes):
-        task_id = uuid.uuid4()
-        self.current_task_id = task_id
-
         print("Processing...")
 
-        # STTでrun_in_executor を使う（STTは重い）
         loop = asyncio.get_running_loop()
+        try:
+            audio_input = await loop.run_in_executor(None, self.stt.convert_for_whisper, raw_bytes)
+            text = await loop.run_in_executor(None, self.stt.transcribe, audio_input)
 
-        audio_input = await loop.run_in_executor(None, self.stt.convert_for_whisper, raw_bytes)
-
-        text = await loop.run_in_executor(None, self.stt.transcribe, audio_input)
-        
-        async with self.llm_lock:
-            # ロック取得時に自分が最新化チェックする
-            if self.current_task_id != task_id:
-                return 
-            
             if text:
                 print(f"User: {text}")
-                # LLMは重い？重ければexecutorへ入れる。いれておくか
                 response = await loop.run_in_executor(None, self.llm.generate, text)
-                print(response)
-                if type(response) == None:
+
+                if response is None:
                     print("Error: No response")
                     return
 
-                # TTSはasyncなのでそのままawait
-                audio_bytes = await self.tts.synthesize(response)
+                print(response)
+                clean_response = remove_thoughts(response)
+
+                audio_bytes = await self.tts.synthesize(clean_response)
                 if audio_bytes is None:
                     print("Error: TTS returned None")
                     return
+
                 audio_source = discord.FFmpegPCMAudio(io.BytesIO(audio_bytes), pipe=True)
+                await play_and_wait(self.vc, audio_source)  
 
-                # 再生処理
-                if self.vc.is_playing():
-                    print("audio is playing so after stop it and play")
-                    self.vc.stop()
-                    self.vc.play(audio_source)
-                else:
-                    print("audio is playing")
-                    self.vc.play(audio_source)
-                    
-
+        finally:
+            self.is_processing = False
     def cleanup(self):
         # 切断時の処理
         print("切断されました")
 
+async def play_and_wait(vc, source):
+    loop = asyncio.get_running_loop()
+    done_event = asyncio.Event()
 
+    def after_callback(error):
+        loop.call_soon_threadsafe(done_event.set)
+
+    vc.play(source, after=after_callback)
+    await done_event.wait()
+    print("Debug: 再生終了通知を受け取りました")
 
 
 
@@ -198,17 +198,75 @@ class MyAudioSink(voice_recv.AudioSink):
 async def on_ready():
     print('Logged in as Mashiro')
 
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+    
+    if message.content.startswith("!"):
+        await bot.process_commands(message)
+        return
+    print(message.content)
+    reply = llm.generate(message.content)
+    print(reply)
+    await message.reply(remove_thoughts(reply))
+
 @bot.command()
 async def join(ctx):
+    global reconnect_enabled
+    reconnect_enabled = True
+
     channel = ctx.author.voice.channel
 
-    vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
+    async def connect_and_listen():
+        vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
+        sink = MyAudioSink(stt, llm, tts, vc)
+        vc.listen(sink)
+        return vc
 
-    sink = MyAudioSink(stt, llm, tts, vc)
-    
-    vc.listen(sink)
+    vc = await connect_and_listen()
 
-    # await ctx.send("喋っていいよ")
+    # 自動再接続ループ
+    async def reconnect_loop():
+        nonlocal vc
+        while reconnect_enabled:
+            try:
+                await asyncio.sleep(1)
+                # 切断されていたら再接続
+                if not vc.is_connected() and reconnect_enabled:
+                    print("切断を検知。再接続を試みます...")
+                    try:
+                        # 既存の接続をクリーンアップ
+                        try:
+                            await vc.disconnect(force=True)
+                        except:
+                            pass
+                        await asyncio.sleep(2)
+                        vc = await connect_and_listen()
+                        print("再接続完了！")
+                    except Exception as e:
+                        print(f"再接続失敗: {e}")
+                        await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                print("再接続ループを終了します")
+                break
+            except Exception as e:
+                print(f"再接続ループでエラー: {e}")
+                if not reconnect_enabled:
+                    break
+
+    bot.loop.create_task(reconnect_loop())
+
+@bot.command()
+async def leave(ctx):
+    global reconnect_enabled
+    reconnect_enabled = False  # 再接続を無効化
+
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        print("正常に切断しました")
+
+
         
 
 

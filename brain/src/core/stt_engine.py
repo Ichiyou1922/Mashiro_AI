@@ -7,13 +7,10 @@ class STTEngine:
     def __init__(self, model_size="small", device="cuda"):
         print("Loading VAD Model")
 
-        # deviceを探索する
-        #if torch.cuda.is_available():
-        #    self.device = torch.device("cuda")
-        #else:
-        self.device = torch.device("cpu")
-        print(f"Running on: {self.device}")
-        
+        # Whisperモデル用のデバイス設定（faster-whisperが内部で使用）
+        self.whisper_device = device
+        print(f"Whisper running on: {self.whisper_device}")
+
         self.SAMPLING_RATE = 16000
         self.USE_ONNX = True
         torch.set_num_threads(1)
@@ -24,13 +21,23 @@ class STTEngine:
                                 VADIterator,
                                 collect_chunks)
         self.vad_model = load_silero_vad(onnx=self.USE_ONNX)
+
         # スレッド競合を避けるため、VAD用とWhisper用で別インスタンスを持つ
-        self.vad_resampler = torchaudio.transforms.Resample(48000, 16000).to(self.device)
-        self.whisper_resampler = torchaudio.transforms.Resample(48000, 16000).to(self.device)
+        # 両方ともCPU上に配置（GPU転送オーバーヘッドを回避）
+        # - VADはCPU(ONNX)で動作するため、GPU経由は無駄
+        # - Whisperへの入力はnumpy(CPU)なので、GPU経由は無駄
+        self.vad_resampler = torchaudio.transforms.Resample(48000, 16000)
+        self.whisper_resampler = torchaudio.transforms.Resample(48000, 16000)
 
         self.hallucinationTexts = [
             "ご視聴ありがとうございました",
             "Thanks for watching",
+            "저는 곤닉쳐고요",
+            "좋아서 예쁘다",
+            "아",
+            " 예 오전주경고가 있었다면 노이 프로젝트가 어른다고",
+            "Thank you.",
+            "Thank you!",
         ]
         '''
         loadedObject = torch.hub.load(
@@ -53,29 +60,22 @@ class STTEngine:
         loaded_whisper_obj = WhisperModel(model_size, device, compute_type="float16")
         self.whisper_model = loaded_whisper_obj
     
-    # Discordから受け取った44100Hzのbytesを16000HzのTensorに変換し、モノラルに圧縮する
+    # Discordから受け取った48kHzのbytesを16kHzのTensorに変換し、モノラルに圧縮する
     def discord_to_silero(self, discord_data: bytes) -> torch.Tensor:
-        # int16で読み込む。copy=Falseでメモリコピーを防ぐ
+        # int16で読み込む
         audio_array = np.frombuffer(discord_data, dtype=np.int16).copy()
         # Tensorに変換して、Float32に正規化する
         # Int16の最大値 32768.0で割って、-1~1の範囲にする
-        tensor_data = torch.from_numpy(audio_array).float() / 32768.0 # torch.from_numpyはゼロコピーで早い
-        # ステレオ(Interleaved)を分離する
-        # [L, R, L, R...] -> [samples, 2] -> [2, samples] (Channels first)
-        # slicingは array[start:stop:step]の形
-        left_channel = tensor_data[::2] # 左チャンネル
-        right_channel = tensor_data[1::2] # 右チャンネル
-        # .view(-1, 2) でデータを二列に並べ直す
-        # モノラルにミックスダウン（平均）
+        tensor_data = torch.from_numpy(audio_array).float() / 32768.0
+        # ステレオ(Interleaved)を分離してモノラルにミックスダウン
+        left_channel = tensor_data[::2]
+        right_channel = tensor_data[1::2]
         tensor_mono = (left_channel + right_channel) / 2.0
-        # バッチ次元を追加 [samples] -> [1, samples] ：Resamplerのために
+        # バッチ次元を追加 [samples] -> [1, samples]
         tensor_mono = tensor_mono.unsqueeze(0)
-        # デバイスに移動
-        tensor_mono = tensor_mono.to(self.device)
+        # CPU上でresample（GPU転送なし）
         resampled_data: torch.Tensor = self.vad_resampler(tensor_mono)
-        result = resampled_data.squeeze()
-        print(f"Debug: Shape={result.shape}, Max={result.abs().max().item()}")
-        return result
+        return resampled_data.squeeze()
     
     def convert_for_whisper(self, discord_data: bytes) -> np.ndarray:
         """
@@ -91,25 +91,22 @@ class STTEngine:
         # ステレオ -> Mono
         audio_mono = (audio_float32[::2] + audio_float32[1::2]) / 2
 
-        # resampling
-        tensor_mono = torch.from_numpy(audio_mono).unsqueeze(0).to(self.device)
+        # CPU上でresampling（GPU転送なし）
+        tensor_mono = torch.from_numpy(audio_mono).unsqueeze(0)
         resampled_tensor = self.whisper_resampler(tensor_mono)
 
-        return resampled_tensor.squeeze().cpu().numpy()
+        return resampled_tensor.squeeze().numpy()
         
 
     def detect_voice(self, audio_data: torch.Tensor) -> bool:
         """VADを使用した音声検出"""
-        # Silero VADは512サンプル固定らしい
+        # Silero VADは512サンプル固定
         window_size_samples = 512
 
-        # データの居場所をCPUかGPUに統一しなければならない。
-        # SileroVADはそこまで重くはないためCPUを選択
-        cpu_audio = audio_data.cpu()
+        # データは既にCPU上にあるので、そのまま使用
         # 8000サンプルのデータを、512ずつスライスしながら判定
-        # main.pyの方で、何秒ごとにsmall_bufferを捨てるかを変えたら、こちらも変えなければならない
-        for i in range(0, len(cpu_audio), window_size_samples):
-            chunk = cpu_audio[i: i + window_size_samples]
+        for i in range(0, len(audio_data), window_size_samples):
+            chunk = audio_data[i: i + window_size_samples]
 
             # 端数はエラーになるので捨てる
             if len(chunk) < window_size_samples:
