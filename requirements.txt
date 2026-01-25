@@ -1,7 +1,8 @@
 # Core Dependencies
-torch==2.7.1
-torchaudio==2.7.1
-torchvision==0.22.1
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0+cu124
+torchaudio==2.6.0+cu124
+torchvision==0.21.0+cu124
 
 # Speech Recognition & Processing
 faster_whisper>=0.10.0
@@ -32,3 +33,7 @@ pyaudio>=0.2.13
 # Utilities
 python-dotenv>=1.0.0
 requests>=2.31.0
+
+# GPU
+nvidia-cublas-cu12
+nvidia-cudnn-cu12

@@ -8,10 +8,10 @@ class STTEngine:
         print("Loading VAD Model")
 
         # deviceを探索する
-        if torch.cuda.is_available():
-            self.device = torch.device("cuda")
-        else:
-            self.device = torch.device("cpu")
+        #if torch.cuda.is_available():
+        #    self.device = torch.device("cuda")
+        #else:
+        self.device = torch.device("cpu")
         print(f"Running on: {self.device}")
         
         self.SAMPLING_RATE = 16000
@@ -24,7 +24,14 @@ class STTEngine:
                                 VADIterator,
                                 collect_chunks)
         self.vad_model = load_silero_vad(onnx=self.USE_ONNX)
-        self.resampler = torchaudio.transforms.Resample(48000, 16000).to(self.device)
+        # スレッド競合を避けるため、VAD用とWhisper用で別インスタンスを持つ
+        self.vad_resampler = torchaudio.transforms.Resample(48000, 16000).to(self.device)
+        self.whisper_resampler = torchaudio.transforms.Resample(48000, 16000).to(self.device)
+
+        self.hallucinationTexts = [
+            "ご視聴ありがとうございました",
+            "Thanks for watching",
+        ]
         '''
         loadedObject = torch.hub.load(
             repo_or_dir='snakers4/silero-vad',
@@ -65,32 +72,68 @@ class STTEngine:
         tensor_mono = tensor_mono.unsqueeze(0)
         # デバイスに移動
         tensor_mono = tensor_mono.to(self.device)
-        resampled_data: torch.Tensor = self.resampler(tensor_mono)
+        resampled_data: torch.Tensor = self.vad_resampler(tensor_mono)
         result = resampled_data.squeeze()
+        print(f"Debug: Shape={result.shape}, Max={result.abs().max().item()}")
         return result
+    
+    def convert_for_whisper(self, discord_data: bytes) -> np.ndarray:
+        """
+        Discordの音声(bytes, 48kHz, Stereo, int16)を
+        Whisper用(numpy, 16kHz, Mono, float32)に変換する
+        """
+        # bytes -> numpy int16
+        audio_int16 = np.frombuffer(discord_data, dtype=np.int16)
+
+        # float32に正規化
+        audio_float32 = audio_int16.astype(np.float32) / 32768.0
+
+        # ステレオ -> Mono
+        audio_mono = (audio_float32[::2] + audio_float32[1::2]) / 2
+
+        # resampling
+        tensor_mono = torch.from_numpy(audio_mono).unsqueeze(0).to(self.device)
+        resampled_tensor = self.whisper_resampler(tensor_mono)
+
+        return resampled_tensor.squeeze().cpu().numpy()
         
 
     def detect_voice(self, audio_data: torch.Tensor) -> bool:
         """VADを使用した音声検出"""
-        '''
+        # Silero VADは512サンプル固定らしい
         window_size_samples = 512
-        for i in range(0, len(audio_data), window_size_samples):
-            chunk = audio_data[i: i + window_size_samples]
+
+        # データの居場所をCPUかGPUに統一しなければならない。
+        # SileroVADはそこまで重くはないためCPUを選択
+        cpu_audio = audio_data.cpu()
+        # 8000サンプルのデータを、512ずつスライスしながら判定
+        # main.pyの方で、何秒ごとにsmall_bufferを捨てるかを変えたら、こちらも変えなければならない
+        for i in range(0, len(cpu_audio), window_size_samples):
+            chunk = cpu_audio[i: i + window_size_samples]
+
+            # 端数はエラーになるので捨てる
             if len(chunk) < window_size_samples:
                 break
-            speech_prob = self.vad_model(chunk, self.SAMPLING_RATE).item()
-            return speech_prob > 0.5
-        '''
-        speech_prob = self.vad_model(audio_data, self.SAMPLING_RATE).item()
-        return speech_prob > 0.5
+
+            # 512サンプルのチャンクを判定
+            speech_prob = self.vad_model(chunk, self.SAMPLING_RATE)
+
+            # 発話判定
+            if speech_prob > 0.5:
+                return True
+        
+        return False
     
     # .cpu().numpy()でテンソルを剥がしてndarrayを渡す
-    def transcribe(self, audio_tensor: torch.Tensor) -> str:
+    def transcribe(self, audio_data: np.ndarray) -> str:
         """音声認識"""
-        audio_data = audio_tensor.cpu().numpy()
+        audio_data = audio_data
         segments, info = self.whisper_model.transcribe(audio_data, beam_size=5)
         text = ""
         for segment in segments:
             text += segment.text
-        return text.strip()
+        if text in self.hallucinationTexts:
+            return ""
+        else:
+            return text.strip()
     
