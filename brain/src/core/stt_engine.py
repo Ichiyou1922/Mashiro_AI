@@ -57,7 +57,10 @@ class STTEngine:
          '''
         
         print(f"Loading Whisper Model ({model_size}...)")
-        loaded_whisper_obj = WhisperModel(model_size, device, compute_type="float16")
+
+        conpute_type = "int8" if device == "cpu" else "float16"
+
+        loaded_whisper_obj = WhisperModel(model_size, device, compute_type=conpute_type)
         self.whisper_model = loaded_whisper_obj
     
     # Discordから受け取った48kHzのbytesを16kHzのTensorに変換し、モノラルに圧縮する
@@ -125,9 +128,18 @@ class STTEngine:
     def transcribe(self, audio_data: np.ndarray) -> str:
         """音声認識"""
         audio_data = audio_data
-        segments, info = self.whisper_model.transcribe(audio_data, beam_size=5)
+        segments, info = self.whisper_model.transcribe(
+            audio_data,
+            beam_size=5,
+            language="ja",
+            condition_on_previous_text=False,
+            vad_filter=True,
+            no_speech_threshold=0.6
+        )
         text = ""
         for segment in segments:
+            if segment.no_speech_prob > 0.6:
+                continue
             text += segment.text
         if text in self.hallucinationTexts:
             return ""

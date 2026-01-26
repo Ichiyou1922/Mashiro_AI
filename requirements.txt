@@ -37,3 +37,9 @@ requests>=2.31.0
 # GPU
 nvidia-cublas-cu12
 nvidia-cudnn-cu12
+
+# groq
+groq
+
+# googleGemini
+google-generativeai

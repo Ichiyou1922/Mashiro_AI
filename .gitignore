@@ -1,5 +1,7 @@
 brain/.venv/
 brain/models/
+brain/data/memory.lancedb/
+brain/data/log/
 body/assets/
 Plan
 ner/.venv/
