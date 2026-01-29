@@ -12,6 +12,8 @@ import time
 import io
 import re
 import logging
+import uvicorn
+import server.websocket as fastapi
 
 logging.getLogger("discord").setLevel(logging.WARNING)
 logging.getLogger("discord.ext.voice_recv").setLevel(logging.WARNING)
@@ -212,6 +214,12 @@ async def play_and_wait(vc, source):
     await done_event.wait()
     print("再生終了")
 
+# FastAPI起動用関数
+async def start_fastapi():
+    config = uvicorn.Config(fastapi.app, host="0.0.0.0", port=8000, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
+
 # ========== Bot Events ==========
 @bot.event
 async def on_ready():
@@ -306,5 +314,15 @@ async def clear(ctx):
     llm.clear_memory()
     await ctx.reply("記憶をリセットしました")
 
+# メインループ
+async def main():
+    async with bot:
+        bot.loop.create_task(start_fastapi())
+        await bot.start(f"{token}")
 
-bot.run(f"{token}")
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

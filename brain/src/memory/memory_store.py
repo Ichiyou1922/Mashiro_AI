@@ -38,20 +38,15 @@ class MemoryStore():
             "source": "discord"
         }])
 
-    def search_memory(self, query: str, user_id: int | None, limit: int = 5) -> list[str]:
+    def search_memory(self, query: str, limit: int = 5):
         """
         queryに関連する記憶をベクトル検索で取得
         - user_idを指定すると、そのユーザーの記憶のみ検索
         - LanceDBの .search(query).limit(limit) を使う
         - textフィールドのみを返す（ベクトルデータを除外）
         """
-        if user_id:
-            results = self.table.search(query).where(f"user_id = {user_id}").limit(limit).to_list()
-        else:
-            results = self.table.search(query).limit(limit).to_list()
-
-        # textフィールドのみを抽出して返す
-        return [r["text"] for r in results]
+        search_query = f"query: {query}"
+        return self.table.search(search_query).limit(limit).to_list()
 
     def get_recent(self, user_id: int, limit: int = 10) -> list:
         """
