@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 DB_PATH = ROOT_DIR / "data"
 
-model = get_registry().get("sentence-transformers").create(name="intfloat/multilingual-e5-large")
+model = get_registry().get("sentence-transformers").create(name="BAAI/bge-m3")
 
 class Memory(LanceModel):
     # ベクトルデータ（検索用）
@@ -22,8 +22,12 @@ class Memory(LanceModel):
     role: str
     timestamp: float
 
-    # extention
+    # extension
     # emotion: str = "neutral"
     source: str = "discord"
 
+class UserProfile(LanceModel):
+    user_id: int
+    display_name: str
+    updated_at: float
     

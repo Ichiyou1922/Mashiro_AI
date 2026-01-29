@@ -12,9 +12,8 @@ import time
 import io
 import re
 import logging
-#from memory.memory_store import MemoryStore
-#from memory.models import Memory
 from myaudiosink import MyAudioSink
+from memory.memory_store import MemoryStore, UserProfile
 
 logging.getLogger("discord").setLevel(logging.WARNING)
 logging.getLogger("discord.ext.voice_recv").setLevel(logging.WARNING)

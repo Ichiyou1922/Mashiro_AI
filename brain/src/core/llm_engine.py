@@ -1,3 +1,7 @@
+import sys
+import os
+# パス解決のおまじない
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from llama_cpp import Llama
 from dotenv import load_dotenv
 import os
@@ -6,6 +10,7 @@ import json
 from groq import Groq
 from google import genai
 from google.genai import types
+
 
 load_dotenv()
 
@@ -72,7 +77,7 @@ class LLMEngine:
 
         print(f"LLM 準備完了 (backend: {backend})")
 
-    def generate(self, user_text: str) -> str:
+    def generate(self, user_id, user_text: str) -> str:
         print("Thinking...")
 
         # ========== Llama ==========
@@ -81,7 +86,9 @@ class LLMEngine:
             response = self.llm_model.create_chat_completion(
                 messages=cast(List[Any], self.history),
                 max_tokens=300,
-                temperature=0.7,
+                temperature=1.0,
+                top_k=64,
+                top_p=0.95,
                 stream=False,
                 stop=[
                     "<end_of_turn>"
