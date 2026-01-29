@@ -26,11 +26,15 @@ stt = STTEngine(device="cuda")
 # backend: "llama" | "groq" | "gemini"
 llm = LLMEngine(backend="llama")
 tts = TTSEngine()
-
+"""
 def remove_thoughts(text: str) -> str:
     pattern = r"\（思考:.*?\）"
     cleaned_text = re.sub(pattern, "", text, flags=re.DOTALL)
     return cleaned_text.strip()
+"""
+def remove_thoughts(text: str) -> str:
+    text = text.replace("<think>", "").replace("</think>", "")
+    return text.strip()
 
 # ========== AudioSink ==========
 class MyAudioSink(voice_recv.AudioSink):
@@ -232,7 +236,12 @@ async def on_message(message: discord.Message):
         )
 
     print(f"Reply: {reply}")
-    await message.reply(remove_thoughts(reply))
+    clean_reply = remove_thoughts(reply)
+    if not clean_reply:
+        print("Empty reply generated. Skipping.")
+        return 
+    
+    await message.reply(clean_reply)
 
 # ========== Bot Commands ==========
 @bot.command()

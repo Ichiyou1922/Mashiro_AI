@@ -45,7 +45,7 @@ class LLMEngine:
         # ========== Llama (ローカル) ==========
         if backend == "llama":
             self.llm_path = os.path.expanduser(
-                "/home/yoichi1922/src/github.com/Ichiyou1922/Mashiro_AI/brain/models/llm/qwen3-4b-abliterated-q4_k_m.gguf"
+                "/home/yoichi1922/src/github.com/Ichiyou1922/Mashiro_AI/brain/models/llm/gemma-3-4b-it-abliterated.q4_k_m.gguf"
             )
             self.llm_model = Llama(
                 model_path=self.llm_path,
@@ -53,7 +53,7 @@ class LLMEngine:
                 n_ctx=n_ctx,
                 # cache_type_k="q8_0",
                 # cache_type_v="q8_0",
-                # chat_format="gemma",
+                chat_format="gemma",
                 verbose=False
             )
 
@@ -102,20 +102,20 @@ class LLMEngine:
             self.history.append({"role": "user", "content": full_context})
             response = self.llm_model.create_chat_completion(
                 messages=cast(List[Any], self.history),
-                max_tokens=300,
+                max_tokens=1024,
                 temperature=1.0,
                 top_k=64,
                 top_p=0.95,
                 stream=False,
                 stop=[
-                    "<end_of_turn>"
+                    "<end_of_turn>",
                     "<|im_end|>", 
                     # "<|endoftext|>", 
                     # "User:",
                     "\nUser:",
                     "</s>",
                     "[INST]",
-                    # "[/INST]",
+                    "[/INST]",
                     "<s>"
                     ]
             )
@@ -156,7 +156,7 @@ class LLMEngine:
 
         # 簡易的なヒストリー解放（Llama/Groq用）
         if self.backend in ["llama", "groq"]:
-            while len(self.history) > 20:
+            while len(self.history) > 40:
                 print("Forgetting old memories...")
                 self.history.pop(1)
             if answer_text:
@@ -219,6 +219,10 @@ Name: {config['name']}
 ## Speech Style
 {speech_style_text}
 
-/no_think
+## Thinking Style
+- **Do NOT use <think> tags.**
+- Speak your internal thoughts out loud as "monologues" or "fillers" in Japanese.
+- Example: "（えーと、それはね...）うん、わかった！"
+- Start responding immediately.
 """
         return prompt.strip()

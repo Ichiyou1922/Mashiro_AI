@@ -1,6 +1,6 @@
 brain/.venv/
 brain/models/
-brain/data/memory.lancedb/
+brain/data/
 brain/data/log/
 body/assets/
 Plan
