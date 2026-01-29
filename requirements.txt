@@ -43,3 +43,6 @@ groq
 
 # googleGemini
 google-generativeai
+
+# pandas
+pandas

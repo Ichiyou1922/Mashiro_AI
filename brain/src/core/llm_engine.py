@@ -10,6 +10,7 @@ import json
 from groq import Groq
 from google import genai
 from google.genai import types
+from memory.memory_store import MemoryStore, UserProfileStore
 
 
 load_dotenv()
@@ -22,11 +23,15 @@ class LLMEngine:
     LLMエンジン
     backend: "llama" | "groq" | "gemini"
     """
-    def __init__(self, backend: str = "gemini", n_ctx: int = 2048):
+    def __init__(self, backend: str = "gemini", n_ctx: int = 4096):
         self.backend = backend
 
+        # 記憶関連
+        self.memory_store = MemoryStore()
+        self.user_profile_store = UserProfileStore()
+
         # 設定ファイル読み込み
-        with open("/home/yoichi1922/src/github.com/Ichiyou1922/Mashiro_AI/brain/config/mashiro_config_temp.json", "r", encoding="utf-8") as f: # システムプロンプト変えたらここも
+        with open("/home/yoichi1922/src/github.com/Ichiyou1922/Mashiro_AI/brain/config/mashiro_config.json", "r", encoding="utf-8") as f: # システムプロンプト変えたらここも
             config = json.load(f)
 
         self.system_prompt = self._build_prompt_without_examples(config)
@@ -40,7 +45,7 @@ class LLMEngine:
         # ========== Llama (ローカル) ==========
         if backend == "llama":
             self.llm_path = os.path.expanduser(
-                "/home/yoichi1922/src/github.com/Ichiyou1922/Mashiro_AI/brain/models/llm/gemma-3-4b-it-abliterated.q4_k_m.gguf"
+                "/home/yoichi1922/src/github.com/Ichiyou1922/Mashiro_AI/brain/models/llm/qwen3-4b-abliterated-q4_k_m.gguf"
             )
             self.llm_model = Llama(
                 model_path=self.llm_path,
@@ -48,7 +53,7 @@ class LLMEngine:
                 n_ctx=n_ctx,
                 # cache_type_k="q8_0",
                 # cache_type_v="q8_0",
-                chat_format="gemma",
+                # chat_format="gemma",
                 verbose=False
             )
 
@@ -77,12 +82,24 @@ class LLMEngine:
 
         print(f"LLM 準備完了 (backend: {backend})")
 
-    def generate(self, user_id, user_text: str) -> str:
+    def generate(self, user_id: int, user_text: str, user_name: str = "User") -> str:
         print("Thinking...")
+        saved_name = self.user_profile_store.get_name(user_id=user_id)
+        display_name = saved_name if saved_name else user_name
 
+        past_memories = self.memory_store.search_memory(user_text, user_id=user_id)
+
+        # 記憶を整形
+        if past_memories:
+            memories_text = "\n".join([f"- {m.replace(chr(10), ' / ')}" for m in past_memories])
+        else:
+            memories_text = "なし"
+
+        context_prompt = f"今話している人の名前: {display_name}\n過去の会話:\n{memories_text}"
+        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}"
         # ========== Llama ==========
         if self.backend == "llama":
-            self.history.append({"role": "user", "content": user_text})
+            self.history.append({"role": "user", "content": full_context})
             response = self.llm_model.create_chat_completion(
                 messages=cast(List[Any], self.history),
                 max_tokens=300,
@@ -103,6 +120,12 @@ class LLMEngine:
                     ]
             )
             answer_text = response['choices'][0]['message']['content'] or ""
+            self.memory_store.add_memory(
+                text=f"User: {user_text}\nAssistant: {answer_text}",
+                user_id=user_id,
+                user_name=user_name,
+                role="interaction"
+            )
 
         # ========== Groq ==========
         elif self.backend == "groq":
@@ -195,5 +218,7 @@ Name: {config['name']}
 
 ## Speech Style
 {speech_style_text}
+
+/no_think
 """
         return prompt.strip()

@@ -2,6 +2,7 @@ import lancedb
 import time
 from pathlib import Path
 from .models import Memory, UserProfile
+import pandas
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 DB_PATH = ROOT_DIR / "data"
@@ -37,16 +38,20 @@ class MemoryStore():
             "source": "discord"
         }])
 
-    def search_memory(self, query: str, user_id: int = None, limit: int = 5) -> list:
+    def search_memory(self, query: str, user_id: int | None, limit: int = 5) -> list[str]:
         """
         queryに関連する記憶をベクトル検索で取得
         - user_idを指定すると、そのユーザーの記憶のみ検索
         - LanceDBの .search(query).limit(limit) を使う
+        - textフィールドのみを返す（ベクトルデータを除外）
         """
         if user_id:
-            return self.table.search(query).where(f"user_id = {user_id}").limit(limit).to_list()
+            results = self.table.search(query).where(f"user_id = {user_id}").limit(limit).to_list()
         else:
-            return self.table.search(query).limit(limit).to_list()
+            results = self.table.search(query).limit(limit).to_list()
+
+        # textフィールドのみを抽出して返す
+        return [r["text"] for r in results]
 
     def get_recent(self, user_id: int, limit: int = 10) -> list:
         """
@@ -75,7 +80,7 @@ class UserProfileStore:
             self.table.merge_insert("user_id")
             .when_matched_update_all()
             .when_not_matched_insert_all()
-            .execute(new_users)
+            .execute([new_users])
         )
 
     def get_name(self, user_id: int) -> str | None:
