@@ -2,6 +2,15 @@ from faster_whisper import WhisperModel
 import torch
 import torchaudio
 import numpy as np
+from dotenv import load_dotenv
+import os
+from groq import Groq
+import io
+from scipy.io import wavfile
+
+load_dotenv()
+
+GROQ_KEY = os.getenv("GROQ_API")
 
 class STTEngine:
     def __init__(self, model_size="small", device="cuda"):
@@ -28,6 +37,10 @@ class STTEngine:
         # - Whisperへの入力はnumpy(CPU)なので、GPU経由は無駄
         self.vad_resampler = torchaudio.transforms.Resample(48000, 16000)
         self.whisper_resampler = torchaudio.transforms.Resample(48000, 16000)
+
+        self.client = Groq(
+            api_key=GROQ_KEY
+        )
 
         self.hallucinationTexts = [
             "ご視聴ありがとうございました",
@@ -99,7 +112,6 @@ class STTEngine:
         resampled_tensor = self.whisper_resampler(tensor_mono)
 
         return resampled_tensor.squeeze().numpy()
-        
 
     def detect_voice(self, audio_data: torch.Tensor) -> bool:
         """VADを使用した音声検出"""
@@ -145,4 +157,23 @@ class STTEngine:
             return ""
         else:
             return text.strip()
+        
+    def groq_transcribe(self, discord_data: bytes) -> str:
+        """groqAPIを使用した音声認識"""
+        tensor_data = self.convert_for_whisper(discord_data)
+        int_data = (tensor_data * 32767).astype(np.int16)
+        bytesio = io.BytesIO()
+        wavfile.write(bytesio, 16000, int_data)
+        bytesio.seek(0)
+        
+        transcription = self.client.audio.transcriptions.create(
+            file=("audio.wav", bytesio, "ausio/wav"),
+            model="whisper-large-v3",
+            prompt="Specify context or spelling",   
+            response_format="json",                 
+            language="ja",                          
+            temperature=0.0                         
+        )
+
+        return transcription.text
     

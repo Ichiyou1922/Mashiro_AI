@@ -108,7 +108,6 @@ class LLMEngine:
         else:
             memories_text = "なし"
 
-        context_prompt = f"今話している人の名前: {display_name}\n過去の会話:\n{memories_text}"
         context_prompt = f"""
 [基本情報]
 - ユーザーの名前: {display_name}
@@ -147,6 +146,8 @@ class LLMEngine:
                 user_name=user_name,
                 role="interaction"
             )
+        
+        
 
         # ========== Groq ==========
         elif self.backend == "groq":
@@ -184,33 +185,97 @@ class LLMEngine:
                 self.history.append({"role": "assistant", "content": answer_text})
 
         return answer_text
-
-    def generate_stream(self, user_text: str):
+    
+    def generate_stream(self,user_id: int, user_text: str, user_name: str = 'User'):
         """ストリーミング生成（Llama専用）"""
         if self.backend != "llama":
             raise NotImplementedError(f"generate_stream is not supported for {self.backend}")
 
         print("Thinking...")
-        self.history.append({"role": "user", "content": user_text})
+
+        saved_name = self.user_profile_store.get_name(user_id=user_id)
+        display_name = saved_name if saved_name else user_name
+
+        past_memories = self.memory_store.search_memory(user_text)
+
+        STOP_TOKENS = {'<|im_end|>', '<end_of_turn>', '</s>', '[INST]', '[/INST]'}
+
+        # Debug
+        """
+        if past_memories:
+            print(f"[RAG Hit] {past_memories['user_name']}: {past_memories['text']}")
+        else:
+            print("[No RAG hit]")
+        """
+
+        # 記憶を整形
+        if past_memories:
+            memories_list = []
+            for m in past_memories:
+                formatted_memory = f"{m['user_name']}: {m['text'].replace(chr(10), ' / ')}"
+                memories_list.append(formatted_memory)
+
+            memories_text = "\n".join(memories_list)
+        else:
+            memories_text = "なし"
+
+        context_prompt = f"""
+[基本情報]
+- ユーザーの名前: {display_name}
+- あなたの名前: ましろ
+
+[記憶]
+{memories_text}
+        """
+        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}"
+        self.history.append({"role": "user", "content": full_context})
 
         response = self.llm_model.create_chat_completion(
             messages=cast(List[Any], self.history),
-            max_tokens=256,
-            temperature=0.7,
-            repeat_penalty=1.1,
-            frequency_penalty=0.1,
-            presence_penalty=0.1,
-            stream=True
+            max_tokens=1024,
+            temperature=1.0,
+            top_k=64,
+            top_p=0.95,
+            stream=True,
+            stop=[
+                "<end_of_turn>",
+                "<|im_end|>", 
+                # "<|endoftext|>", 
+                # "User:",
+                "\nUser:",
+                "</s>",
+                "[INST]",
+                "[/INST]",
+                "<s>"
+                ]
         )
 
         full_response = ""
-        for chunk in response:
-            delta = chunk['choices'][0]['delta']
-            if 'content' in delta:
-                content = delta['content']
-                full_response += content
-                yield content
-        self.history.append({"role": "assistant", "content": full_response})
+        try:
+            for chunk in response:
+                delta = chunk['choices'][0]['delta']
+                if 'content' in delta:
+                    content = delta['content']
+                    if content not in STOP_TOKENS:
+                        full_response += content
+                        yield content
+
+        finally:         
+            # 簡易的なヒストリー解放（Llama/Groq用）
+            if self.backend in ["llama", "groq"]:
+                while len(self.history) > 10:
+                    print("Forgetting old memories...")
+                    self.history.pop(1)
+                if full_response:
+                    print(full_response)
+                    self.history.append({"role": "assistant", "content": full_response})
+            
+            self.memory_store.add_memory(
+                    text=f"User: {user_text}\nAssistant: {full_response}",
+                    user_id=user_id,
+                    user_name=user_name,
+                    role="interaction"
+                )
 
     def clear_memory(self):
         print("Clearing History")

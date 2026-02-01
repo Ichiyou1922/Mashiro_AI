@@ -170,12 +170,15 @@ class MyAudioSink(voice_recv.AudioSink):
         print("Processing...")
 
         loop = asyncio.get_running_loop()
+
         try:
-            audio_input = await loop.run_in_executor(None, self.stt.convert_for_whisper, raw_bytes)
-            text = await loop.run_in_executor(None, self.stt.transcribe, audio_input)
+            # audio_input = await loop.run_in_executor(None, self.stt.convert_for_whisper, raw_bytes)
+            # text = await loop.run_in_executor(None, self.stt.transcribe, audio_input)
+            text = await loop.run_in_executor(None, self.stt.groq_transcribe, raw_bytes)
 
             if text:
-                print(f"User: {text}")
+                print(f"{user.display_name}: {text}")
+                """
                 print("Thinking...")
                 response = await loop.run_in_executor(
                     None, self.llm.generate, int(user_key), text, user.display_name
@@ -196,6 +199,12 @@ class MyAudioSink(voice_recv.AudioSink):
 
                 audio_source = discord.FFmpegPCMAudio(io.BytesIO(audio_bytes), pipe=True)
                 await play_and_wait(self.vc, audio_source)
+                """
+                await process_with_stream(
+                    self.llm.generate_stream(int(user_key), text, user.display_name),
+                    self.tts,
+                    self.vc
+                    )
 
         finally:
             self.is_processing = False
@@ -203,13 +212,96 @@ class MyAudioSink(voice_recv.AudioSink):
     def cleanup(self):
         print("切断されました")
 
+def producer_task(generator, text_queue, loop):
+    buffer = ''
+    full_text = ''
+    for token in generator:
+        try:
+            if token is None:
+                if buffer:
+                    loop.call_soon_threadsafe(text_queue.put_nowait, buffer)
+                    buffer = ''
+                    continue
+                else:
+                    continue
+            elif token in ["、", "。", "！", "？", "..."]:
+                if buffer:
+                    loop.call_soon_threadsafe(text_queue.put_nowait, buffer + token)
+                    full_text += buffer + token
+                    buffer = ''
+                else:
+                    continue
+            else:
+                buffer += token
+
+        except Exception as e:
+            print(f"producer_task: {e}")
+            break
+        
+    loop.call_soon_threadsafe(text_queue.put_nowait, buffer)
+    loop.call_soon_threadsafe(text_queue.put_nowait, None)
+
+    print(full_text)
+    
+async def tts_worker_task(text_queue, audio_queue, tts):
+    while True:
+        try:
+            buffer = await text_queue.get()
+            if buffer is None:
+                audio_queue.put_nowait(None)
+                break
+
+            audio_bytes = await tts.synthesize(buffer)
+            if audio_bytes is None:
+                print("音声合成に失敗しました。")
+                break
+            audio_queue.put_nowait(audio_bytes)
+        
+        except Exception as e:
+            print(f"tts_worker_task: {e}")
+            audio_queue.put_nowait(None)
+
+async def player_task(audio_queue, vc, loop):
+    done_event = asyncio.Event()
+
+    def after_callback(_error):
+        loop.call_soon_threadsafe(done_event.set)
+
+    while True:
+        done_event.clear()
+        try:
+            audio_data = await audio_queue.get()
+            if audio_data is None:
+                break
+            audio_source = discord.FFmpegPCMAudio(io.BytesIO(audio_data), pipe=True)
+            vc.play(audio_source, after=after_callback)
+            await done_event.wait()
+            print("再生終了")
+        except Exception as e:
+            print(f"player_taskで例外が発生しました: {e}")
+            break
+
+async def process_with_stream(generator, tts, vc):
+    loop = asyncio.get_running_loop()
+    text_queue = asyncio.Queue()
+    audio_queue = asyncio.Queue()
+
+    await asyncio.gather(
+        loop.run_in_executor(None, producer_task, generator, text_queue, loop),
+        tts_worker_task(text_queue, audio_queue, tts, loop),
+        player_task(audio_queue, vc, loop)
+    )
+
+
+
+
 async def play_and_wait(vc, source):
     loop = asyncio.get_running_loop()
     done_event = asyncio.Event()
 
     def after_callback(_error):
         loop.call_soon_threadsafe(done_event.set)
-
+    
     vc.play(source, after=after_callback)
     await done_event.wait()
     print("再生終了")
