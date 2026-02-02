@@ -1,7 +1,6 @@
 import discord
-from core.llm_engine import LLMEngine
-from core.stt_engine import STTEngine
-from core.tts_engine import TTSEngine
+from core.vad_engine import VADEngine
+from memory.memory_store import UserProfileStore
 from discord.ext import commands
 from discord.ext import voice_recv
 from dotenv import load_dotenv
@@ -14,6 +13,10 @@ import re
 import logging
 import uvicorn
 import server.websocket as fastapi
+import websockets
+import struct
+from server.protocol import parse_client_message, create_state_message, create_text_message
+import json
 
 logging.getLogger("discord").setLevel(logging.WARNING)
 logging.getLogger("discord.ext.voice_recv").setLevel(logging.WARNING)
@@ -22,29 +25,27 @@ load_dotenv()
 
 token = os.getenv("DISCORD_BOT_TOKEN")
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
-reconnect_enabled = True  # 再接続フラグ
+reconnect_enabled = True  # 再接続フラグ。
 
-stt = STTEngine(device="cuda")
-# backend: "llama" | "groq" | "gemini"
-llm = LLMEngine(backend="llama")
-tts = TTSEngine()
-"""
-def remove_thoughts(text: str) -> str:
-    pattern = r"\（思考:.*?\）"
-    cleaned_text = re.sub(pattern, "", text, flags=re.DOTALL)
-    return cleaned_text.strip()
-"""
+profile = UserProfileStore()
+
+
+# def remove_thoughts(text: str) -> str:
+#     pattern = r"\（思考:.*?\）"
+#     cleaned_text = re.sub(pattern, "", text, flags=re.DOTALL)
+#     return cleaned_text.strip()
+
 def remove_thoughts(text: str) -> str:
     text = text.replace("<think>", "").replace("</think>", "")
     return text.strip()
 
 # ========== AudioSink ==========
 class MyAudioSink(voice_recv.AudioSink):
-    def __init__(self, stt_engine: STTEngine, llm_engine: LLMEngine, tts_engine: TTSEngine, vc):
+    def __init__(self, vc, ws):
+        print("MyAudioSink __init__ 開始")
         super().__init__()
-        self.stt = stt_engine
-        self.llm = llm_engine
-        self.tts = tts_engine
+        self.vad = VADEngine()
+
         self.ev_loop = bot.loop
 
         # ユーザーごとの音声バッファ
@@ -63,14 +64,20 @@ class MyAudioSink(voice_recv.AudioSink):
         # オーディオキュー
         self.audio_queue = asyncio.Queue()
 
+        # websocket
+        self.ws = ws
+
+        print("MyAudioSink __init__ 完了")
+
     def wants_opus(self) -> bool:
         return False
 
     async def process_queue_loop(self):
         """キューから音声データを取り出して順番に処理するワーカー"""
+        print("process_queue started")
         while True:
             user, user_key, audio_bytes = await self.audio_queue.get()
-            await self.process_conversation(user, user_key, audio_bytes)
+            await self.process_conversation(user_key, audio_bytes)
 
     async def check_silence_loop(self):
         print("Watchdog started.")
@@ -110,101 +117,80 @@ class MyAudioSink(voice_recv.AudioSink):
                         await self.audio_queue.put((user, user_key, full_audio_bytes))
 
     def write(self, user, data) -> None:
-        # ユーザーが特定できないパケットは無視
-        if user is None or user.bot:
-            return
-
-        # Processing中は新しい音声を受け付けない
-        if self.is_processing:
-            return
-
-        # data.pcmは bytes型のPCMデータ
-        if not hasattr(data, 'pcm'):
-            print(f"Error: Data has no .pcm attribute. Type: {type(data)}")
-            return
-
-        user_key = str(user.id)
-        current_time = time.time()
-
-        # 初期化
-        if user_key not in self.user_data:
-            self.user_data[user_key] = {
-                "buffer": [],
-                "small_buffer": [],
-                "tick": 0,
-                "is_speaking": False,
-                "last_seen": current_time,
-                "user": user  # userオブジェクトを保存
-            }
-
-        # パケット受信のたびにlast_seenとuserを更新
-        self.user_data[user_key]["last_seen"] = current_time
-        self.user_data[user_key]["user"] = user
-
-        CHUNK_LIMIT = 5
-
-        # データをバッファに溜める
-        if self.user_data[user_key]["tick"] < CHUNK_LIMIT:
-            self.user_data[user_key]["small_buffer"].append(data.pcm)
-            self.user_data[user_key]["tick"] += 1
-
-        else:
-            # 溜まったbytesを結合してVAD判定
-            self.user_data[user_key]["small_buffer"].append(data.pcm)
-            big_buffer = b"".join(self.user_data[user_key]["small_buffer"])
-            self.user_data[user_key]["small_buffer"].clear()
-            self.user_data[user_key]["tick"] = 0
-
-            tensor_data: torch.Tensor = self.stt.discord_to_silero(big_buffer)
-            vad_result = self.stt.detect_voice(tensor_data)
-
-            if vad_result:
-                self.user_data[user_key]["is_speaking"] = True
-                self.user_data[user_key]["buffer"].append(big_buffer)
-
-            elif self.user_data[user_key]["is_speaking"]:
-                # 発話中の無音区間もバッファに追加
-                self.user_data[user_key]["buffer"].append(big_buffer)
-
-    async def process_conversation(self, user, user_key, raw_bytes):
-        print("Processing...")
-
-        loop = asyncio.get_running_loop()
-
         try:
-            # audio_input = await loop.run_in_executor(None, self.stt.convert_for_whisper, raw_bytes)
-            # text = await loop.run_in_executor(None, self.stt.transcribe, audio_input)
-            text = await loop.run_in_executor(None, self.stt.groq_transcribe, raw_bytes)
+            # ユーザーが特定できないパケットは無視
+            if user is None or user.bot:
+                return
 
-            if text:
-                print(f"{user.display_name}: {text}")
-                """
-                print("Thinking...")
-                response = await loop.run_in_executor(
-                    None, self.llm.generate, int(user_key), text, user.display_name
-                )
+            # Processing中は新しい音声を受け付けない
+            if self.is_processing:
+                return
 
-                if response is None:
-                    print("Error: No response")
-                    return
+            # data.pcmは bytes型のPCMデータ
+            if not hasattr(data, 'pcm'):
+                print(f"Error: Data has no .pcm attribute. Type: {type(data)}")
+                return
 
-                print(response)
-                clean_response = remove_thoughts(response)
+            user_key = str(user.id)
+            current_time = time.time()
 
-                print("Synthesizing...")
-                audio_bytes = await self.tts.synthesize(clean_response)
-                if audio_bytes is None:
-                    print("Error: TTS returned None")
-                    return
+            # 初期化
+            if user_key not in self.user_data:
+                self.user_data[user_key] = {
+                    "buffer": [],
+                    "small_buffer": [],
+                    "tick": 0,
+                    "is_speaking": False,
+                    "last_seen": current_time,
+                    "user": user  # userオブジェクトを保存
+                }
 
-                audio_source = discord.FFmpegPCMAudio(io.BytesIO(audio_bytes), pipe=True)
-                await play_and_wait(self.vc, audio_source)
-                """
-                await process_with_stream(
-                    self.llm.generate_stream(int(user_key), text, user.display_name),
-                    self.tts,
-                    self.vc
-                    )
+            # パケット受信のたびにlast_seenとuserを更新
+            self.user_data[user_key]["last_seen"] = current_time
+            self.user_data[user_key]["user"] = user
+
+            CHUNK_LIMIT = 5
+
+            # データをバッファに溜める
+            if self.user_data[user_key]["tick"] < CHUNK_LIMIT:
+                self.user_data[user_key]["small_buffer"].append(data.pcm)
+                self.user_data[user_key]["tick"] += 1
+
+            else:
+                # 溜まったbytesを結合してVAD判定
+                self.user_data[user_key]["small_buffer"].append(data.pcm)
+                big_buffer = b"".join(self.user_data[user_key]["small_buffer"])
+                self.user_data[user_key]["small_buffer"].clear()
+                self.user_data[user_key]["tick"] = 0
+
+                tensor_data: torch.Tensor = self.vad.discord_to_silero(big_buffer)
+                vad_result = self.vad.detect_voice(tensor_data)
+
+                if vad_result:
+                    if not self.user_data[user_key]["is_speaking"]:
+                        asyncio.run_coroutine_threadsafe(
+                            self.ws.send(create_state_message("listening")),
+                            self.ev_loop
+                        )
+                    self.user_data[user_key]["is_speaking"] = True
+                    
+                    self.user_data[user_key]["buffer"].append(big_buffer)
+
+                elif self.user_data[user_key]["is_speaking"]:
+                    # 発話中の無音区間もバッファに追加
+                    self.user_data[user_key]["buffer"].append(big_buffer)
+        except Exception as e:
+            print(f"write error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    async def process_conversation(self, user_key, raw_bytes):
+        print("Processing...")
+        try:
+            send_bytes = struct.pack(">q", int(user_key)) + raw_bytes
+            await self.ws.send(send_bytes)
+            await self.ws.send(json.dumps({"type": "audio_end"}))
+                
 
         finally:
             self.is_processing = False
@@ -212,54 +198,31 @@ class MyAudioSink(voice_recv.AudioSink):
     def cleanup(self):
         print("切断されました")
 
-def producer_task(generator, text_queue, loop):
-    buffer = ''
-    full_text = ''
-    for token in generator:
-        try:
-            if token is None:
-                if buffer:
-                    loop.call_soon_threadsafe(text_queue.put_nowait, buffer)
-                    buffer = ''
-                    continue
-                else:
-                    continue
-            elif token in ["、", "。", "！", "？", "..."]:
-                if buffer:
-                    loop.call_soon_threadsafe(text_queue.put_nowait, buffer + token)
-                    full_text += buffer + token
-                    buffer = ''
-                else:
-                    continue
-            else:
-                buffer += token
-
-        except Exception as e:
-            print(f"producer_task: {e}")
-            break
-        
-    loop.call_soon_threadsafe(text_queue.put_nowait, buffer)
-    loop.call_soon_threadsafe(text_queue.put_nowait, None)
-
-    print(full_text)
-    
-async def tts_worker_task(text_queue, audio_queue, tts):
+async def receiver_task(ws, play_queue: asyncio.Queue):
     while True:
         try:
-            buffer = await text_queue.get()
-            if buffer is None:
-                audio_queue.put_nowait(None)
-                break
+            data = await ws.recv()
+            if isinstance(data, bytes):
+                await play_queue.put(data)
+            
+            else:
+                message = parse_client_message(data)
+                if message["type"] == "state":
+                    print(f"receive message: {message['payload']['state']}")
+                    continue
+                
+                elif message["type"] == "done":
+                    print("receiver_task done")
+                    continue
 
-            audio_bytes = await tts.synthesize(buffer)
-            if audio_bytes is None:
-                print("音声合成に失敗しました。")
-                break
-            audio_queue.put_nowait(audio_bytes)
-        
+                elif message["type"] == "error":
+                    print(f"receive error: {message['payload']['message']}")
+                    continue
         except Exception as e:
-            print(f"tts_worker_task: {e}")
-            audio_queue.put_nowait(None)
+            print(f"receiver_task error: {e}")
+            break
+
+
 
 async def player_task(audio_queue, vc, loop):
     done_event = asyncio.Event()
@@ -281,31 +244,6 @@ async def player_task(audio_queue, vc, loop):
             print(f"player_taskで例外が発生しました: {e}")
             break
 
-async def process_with_stream(generator, tts, vc):
-    loop = asyncio.get_running_loop()
-    text_queue = asyncio.Queue()
-    audio_queue = asyncio.Queue()
-
-    await asyncio.gather(
-        loop.run_in_executor(None, producer_task, generator, text_queue, loop),
-        tts_worker_task(text_queue, audio_queue, tts, loop),
-        player_task(audio_queue, vc, loop)
-    )
-
-
-
-
-async def play_and_wait(vc, source):
-    loop = asyncio.get_running_loop()
-    done_event = asyncio.Event()
-
-    def after_callback(_error):
-        loop.call_soon_threadsafe(done_event.set)
-    
-    vc.play(source, after=after_callback)
-    await done_event.wait()
-    print("再生終了")
-
 # FastAPI起動用関数
 async def start_fastapi():
     config = uvicorn.Config(fastapi.app, host="0.0.0.0", port=8000, log_level="info")
@@ -315,6 +253,8 @@ async def start_fastapi():
 # ========== Bot Events ==========
 @bot.event
 async def on_ready():
+    global text_ws
+    text_ws = await websockets.connect("ws://localhost:8000/ws")
     print('Logged in as Mashiro')
 
 @bot.event
@@ -327,33 +267,43 @@ async def on_message(message: discord.Message):
         return
 
     print(f"User: {message.content}")
-    print(f"User ID: {message.author.id}")
-    loop = asyncio.get_running_loop()
 
     async with message.channel.typing():
-        reply = await loop.run_in_executor(
-            None, llm.generate, message.author.id, message.content, message.author.display_name
-        )
-
-    print(f"Reply: {reply}")
-    clean_reply = remove_thoughts(reply)
-    if not clean_reply:
-        print("Empty reply generated. Skipping.")
-        return 
+        await text_ws.send(create_text_message(
+            message.author.id,
+            message.content,
+        ))
+        print("websocketにメッセージを送信")
+    try:
+        response_data = await text_ws.recv()
+        response = parse_client_message(str(response_data))
+        reply = response["payload"]["text"]
+        if not reply:
+            print("Empty reply generated. Skipping.")
+            return 
+    except Exception as e:
+        print(f"on_message error: {e}")
     
-    await message.reply(clean_reply)
+    await message.reply(reply)
 
 # ========== Bot Commands ==========
 @bot.command()
 async def join(ctx):
     global reconnect_enabled
     reconnect_enabled = True
-
+    play_queue = asyncio.Queue()
+    uri = "ws://localhost:8000/ws"
+    ws = await websockets.connect(uri)
     channel = ctx.author.voice.channel
+    loop = asyncio.get_event_loop()
+
     async def connect_and_listen():
         vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
-        sink = MyAudioSink(stt, llm, tts, vc)
+        sink = MyAudioSink(vc, ws)
         vc.listen(sink)
+        print("vc.listen 完了")
+        bot.loop.create_task(receiver_task(ws, play_queue)) # BG
+        bot.loop.create_task(player_task(play_queue, vc, loop)) #BG
         return vc
 
     vc = await connect_and_listen()
@@ -398,13 +348,15 @@ async def leave(ctx):
 @bot.command()
 async def callme(ctx, name: str):
     """呼び名を変更するコマンド"""
-    llm.user_profile_store.set_name(user_id=ctx.author.id, display_name=name)
+    profile.set_name(user_id=ctx.author.id, display_name=name)
     await ctx.reply(f"名前を{name}で記憶しました。")
 
+"""
 @bot.command()
 async def clear(ctx):
     llm.clear_memory()
     await ctx.reply("記憶をリセットしました")
+"""
 
 # メインループ
 async def main():
