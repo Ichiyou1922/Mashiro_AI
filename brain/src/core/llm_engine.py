@@ -11,6 +11,7 @@ from groq import Groq
 from google import genai
 from google.genai import types
 from memory.memory_store import MemoryStore, UserProfileStore
+import re
 
 
 load_dotenv()
@@ -23,7 +24,7 @@ class LLMEngine:
     LLMエンジン
     backend: "llama" | "groq" | "gemini"
     """
-    def __init__(self, backend: str = "gemini", n_ctx: int = 2048):
+    def __init__(self, backend: str = "gemini", n_ctx: int = 8192):
         self.backend = backend
 
         # 記憶関連
@@ -45,7 +46,7 @@ class LLMEngine:
         # ========== Llama (ローカル) ==========
         if backend == "llama":
             self.llm_path = os.path.expanduser(
-                "/home/yoichi1922/src/github.com/Ichiyou1922/Mashiro_AI/brain/models/llm/gemma-3-4b-it-abliterated.q4_k_m.gguf"
+                "/home/yoichi1922/src/github.com/Ichiyou1922/Mashiro_AI/brain/models/llm/huihui-ai_Huihui-gemma-3n-E4B-it-abliterated-Q4_K_M.gguf"
             )
             self.llm_model = Llama(
                 model_path=self.llm_path,
@@ -53,6 +54,7 @@ class LLMEngine:
                 n_ctx=n_ctx,
                 # cache_type_k="q8_0",
                 # cache_type_v="q8_0",
+                # chat_format = "chatml"
                 chat_format="gemma",
                 verbose=False
             )
@@ -62,7 +64,7 @@ class LLMEngine:
             self.groq_client = Groq(
                 api_key=os.environ.get("GROQ_API_KEY", f"{GROQ_KEY}")
             )
-            self.groq_model = "llama-3.3-70b-versatile"
+            self.groq_model = "llama-3.1-8b-instant"
 
         # ========== Gemini ==========
         elif backend == "gemini":
@@ -101,7 +103,7 @@ class LLMEngine:
         if past_memories:
             memories_list = []
             for m in past_memories:
-                formatted_memory = f"{m['user_name']}: {m['text'].replace(chr(10), ' / ')}"
+                formatted_memory = m['text'].replace(chr(10), ' / ')
                 memories_list.append(formatted_memory)
 
             memories_text = "\n".join(memories_list)
@@ -116,7 +118,7 @@ class LLMEngine:
 [記憶]
 {memories_text}
         """
-        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}"
+        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}\n\n/no_think"
         # ========== Llama ==========
         if self.backend == "llama":
             self.history.append({"role": "user", "content": full_context})
@@ -128,22 +130,28 @@ class LLMEngine:
                 top_p=0.95,
                 stream=False,
                 stop=[
+                    # Gemma
                     "<end_of_turn>",
-                    "<|im_end|>", 
-                    # "<|endoftext|>", 
-                    # "User:",
-                    "\nUser:",
+                    "<start_of_turn>",
+                    # ChatML (Qwen等)
+                    "<|im_end|>",
+                    "<|endoftext|>",
+                    # Llama
                     "</s>",
                     "[INST]",
                     "[/INST]",
-                    "<s>"
+                    "<s>",
+                    # 共通
+                    "\nUser:",
+                    "[コンテキスト]",
+                    "[/CONTEXT]",
                     ]
             )
             answer_text = response['choices'][0]['message']['content'] or ""
             self.memory_store.add_memory(
-                text=f"User: {user_text}\nAssistant: {answer_text}",
+                text=f"{display_name}: {user_text} / ましろ: {answer_text}",
                 user_id=user_id,
-                user_name=user_name,
+                user_name=display_name,
                 role="interaction"
             )
         
@@ -155,7 +163,7 @@ class LLMEngine:
             chat_completion = self.groq_client.chat.completions.create(
                 messages=self.history,
                 model=self.groq_model,
-                temperature=0.7,
+                temperature=0.9,
                 max_completion_tokens=256,
                 top_p=1,
                 stop=None,
@@ -172,7 +180,7 @@ class LLMEngine:
             raise ValueError(f"Unknown backend: {self.backend}")
 
         # 特殊トークンの除去
-        for s in ["<|im_end|>", "<|endoftext|>"]:
+        for s in ["<|im_end|>", "<|endoftext|>", "<think>", "</think>", "<end_of_turn>", "<start_of_turn>"]:
             answer_text = answer_text.replace(s, "")
         answer_text = answer_text.strip()
 
@@ -198,7 +206,7 @@ class LLMEngine:
 
         past_memories = self.memory_store.search_memory(user_text)
 
-        STOP_TOKENS = {'<|im_end|>', '<end_of_turn>', '</s>', '[INST]', '[/INST]'}
+        STOP_TOKENS = {'<|im_end|>', '<|endoftext|>', '<end_of_turn>', '<start_of_turn>', '</s>', '[INST]', '[/INST]', '<s>'}
 
         # Debug
         """
@@ -212,7 +220,7 @@ class LLMEngine:
         if past_memories:
             memories_list = []
             for m in past_memories:
-                formatted_memory = f"{m['user_name']}: {m['text'].replace(chr(10), ' / ')}"
+                formatted_memory = m['text'].replace(chr(10), ' / ')
                 memories_list.append(formatted_memory)
 
             memories_text = "\n".join(memories_list)
@@ -227,7 +235,7 @@ class LLMEngine:
 [記憶]
 {memories_text}
         """
-        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}"
+        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}/no_think"
         self.history.append({"role": "user", "content": full_context})
 
         response = self.llm_model.create_chat_completion(
@@ -238,15 +246,21 @@ class LLMEngine:
             top_p=0.95,
             stream=True,
             stop=[
+                # Gemma
                 "<end_of_turn>",
-                "<|im_end|>", 
-                # "<|endoftext|>", 
-                # "User:",
-                "\nUser:",
+                "<start_of_turn>",
+                # ChatML (Qwen等)
+                "<|im_end|>",
+                "<|endoftext|>",
+                # Llama
                 "</s>",
                 "[INST]",
                 "[/INST]",
-                "<s>"
+                "<s>",
+                # 共通
+                "\nUser:",
+                "[コンテキスト]",
+                "[/CONTEXT]",
                 ]
         )
 
@@ -271,9 +285,9 @@ class LLMEngine:
                     self.history.append({"role": "assistant", "content": full_response})
             
             self.memory_store.add_memory(
-                    text=f"User: {user_text}\nAssistant: {full_response}",
+                    text=f"{display_name}: {user_text} / ましろ: {full_response}",
                     user_id=user_id,
-                    user_name=user_name,
+                    user_name=display_name,
                     role="interaction"
                 )
 
@@ -310,5 +324,7 @@ Name: {config['name']}
 - Speak your internal thoughts out loud as "monologues" or "fillers" in Japanese.
 - Example: "（えーと、それはね...）うん、わかった！"
 - Start responding immediately.
+
+/no_think
 """
         return prompt.strip()

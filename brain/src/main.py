@@ -67,6 +67,9 @@ class MyAudioSink(voice_recv.AudioSink):
         # websocket
         self.ws = ws
 
+        # AIの状態
+        self.ai_state = "idle" # idle / listening / speaking
+
         print("MyAudioSink __init__ 完了")
 
     def wants_opus(self) -> bool:
@@ -85,7 +88,9 @@ class MyAudioSink(voice_recv.AudioSink):
             await asyncio.sleep(0.1)
 
             # Processing中はスキップ
-            if self.is_processing:
+            if self.is_processing or self.ai_state == "speaking":
+                self.user_data[user_key]["buffer"].clear()
+                self.user_data[user_key]["is_speaking"] = False
                 continue
 
             current_time = time.time()
@@ -98,7 +103,7 @@ class MyAudioSink(voice_recv.AudioSink):
                 # 最後のパケットから0.5秒以上経過してる？
                 silence_duration = current_time - self.user_data[user_key]["last_seen"]
 
-                if silence_duration > 1.0:
+                if silence_duration > 0.5:
                     self.is_processing = True
 
                     print(f"\nFlash! (Silence: {silence_duration:.2f}s)")
@@ -118,6 +123,8 @@ class MyAudioSink(voice_recv.AudioSink):
 
     def write(self, user, data) -> None:
         try:
+            if self.ai_state == "speaking":
+                return
             # ユーザーが特定できないパケットは無視
             if user is None or user.bot:
                 return
@@ -190,15 +197,17 @@ class MyAudioSink(voice_recv.AudioSink):
             send_bytes = struct.pack(">q", int(user_key)) + raw_bytes
             await self.ws.send(send_bytes)
             await self.ws.send(json.dumps({"type": "audio_end"}))
-                
 
+        except Exception as e:
+            print(f"process_conversation error: {e}")
+        
         finally:
             self.is_processing = False
 
     def cleanup(self):
         print("切断されました")
 
-async def receiver_task(ws, play_queue: asyncio.Queue):
+async def receiver_task(ws, play_queue: asyncio.Queue, sink: MyAudioSink):
     while True:
         try:
             data = await ws.recv()
@@ -208,10 +217,12 @@ async def receiver_task(ws, play_queue: asyncio.Queue):
             else:
                 message = parse_client_message(data)
                 if message["type"] == "state":
+                    sink.ai_state = message["payload"]["state"]
                     print(f"receive message: {message['payload']['state']}")
                     continue
                 
                 elif message["type"] == "done":
+                    sink.ai_state = "idle"
                     print("receiver_task done")
                     continue
 
@@ -267,6 +278,7 @@ async def on_message(message: discord.Message):
         return
 
     print(f"User: {message.content}")
+    print(f"user_id: {message.author.id}")
 
     async with message.channel.typing():
         await text_ws.send(create_text_message(
@@ -302,7 +314,7 @@ async def join(ctx):
         sink = MyAudioSink(vc, ws)
         vc.listen(sink)
         print("vc.listen 完了")
-        bot.loop.create_task(receiver_task(ws, play_queue)) # BG
+        bot.loop.create_task(receiver_task(ws, play_queue, sink)) # BG
         bot.loop.create_task(player_task(play_queue, vc, loop)) #BG
         return vc
 

@@ -54,16 +54,18 @@ class STTEngine:
         self.vad = VADEngine()
     
     # .cpu().numpy()でテンソルを剥がしてndarrayを渡す
-    def transcribe(self, audio_data: np.ndarray) -> str:
+    def transcribe(self, audio_data: np.ndarray) -> str | None:
         """音声認識"""
         audio_data = audio_data
         segments, info = self.whisper_model.transcribe(
             audio_data,
+            # word_timestamps=True,
             beam_size=5,
             language="ja",
             condition_on_previous_text=False,
             vad_filter=True,
-            no_speech_threshold=0.6
+            no_speech_threshold=0.6,
+            initial_prompt="えーと、あー、うーん、そのー" # フィラーの追加
         )
         text = ""
         for segment in segments:
@@ -71,11 +73,11 @@ class STTEngine:
                 continue
             text += segment.text
         if text in self.hallucinationTexts:
-            return ""
+            return
         else:
             return text.strip()
         
-    def groq_transcribe(self, discord_data: bytes) -> str:
+    def groq_transcribe(self, discord_data: bytes) -> str | None:
         """groqAPIを使用した音声認識"""
         tensor_data = self.vad.convert_for_whisper(discord_data)
         int_data = (tensor_data * 32767).astype(np.int16)
@@ -86,11 +88,14 @@ class STTEngine:
         transcription = self.client.audio.transcriptions.create(
             file=("audio.wav", bytesio, "ausio/wav"),
             model="whisper-large-v3-turbo",
-            prompt="Specify context or spelling",   
+            prompt="えーと、あー、うーん等のフィラーも含めて書き起こしてください",   
             response_format="json",                 
             language="ja",                          
-            temperature=0.0                         
-        )
+            temperature=0.0,       
 
-        return transcription.text
+        )
+        if transcription.text in self.hallucinationTexts:
+            return
+            
+        return transcription.text.strip()
     

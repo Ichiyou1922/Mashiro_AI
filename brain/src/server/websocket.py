@@ -9,14 +9,20 @@ import asyncio
 from core.llm_engine import LLMEngine
 from core.stt_engine import STTEngine
 from core.tts_engine import TTSEngine
+from core.vad_engine import VADEngine
 import struct
+from memory.memory_store import UserProfileStore
 
 app = FastAPI()
 
-stt = STTEngine()
+stt = STTEngine(model="groq")
 llm = LLMEngine("llama")
 
 tts = TTSEngine()
+
+vad = VADEngine()
+
+user_profile = UserProfileStore()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -70,8 +76,9 @@ async def receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
                         text = msg["payload"]["text"]
                         print("テキストを受信したよ")
 
-                        response = await loop.run_in_executor(None, llm.generate, user_id, text)
+                        response = await loop.run_in_executor(None, llm.generate, user_id, text, user_profile.get_name(user_id) or "User")
                         print("メッセージを生成したよ")
+                        print(f"ましろ: {response}")
                         await websocket.send_text(create_text_response_message(response))
                         print("Discordに流したよ")
                     
@@ -107,10 +114,12 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                 continue
             else:
                 await websocket.send_text(create_state_message("thinking"))
+                # audio_data_silero = await loop.run_in_executor(None, vad.convert_for_whisper, audio_data)
+                # text = await loop.run_in_executor(None, stt.transcribe, audio_data_silero)
                 text = await loop.run_in_executor(None, stt.groq_transcribe, audio_data)
                 print(f"{user_id}: {text}")
                 await websocket.send_text(create_subtitle_message(f"{user_id}: {text}", True))
-                generator = llm.generate_stream(user_id, text)
+                generator = llm.generate_stream(user_id, text, user_profile.get_name(user_id) or "User")
                 await loop.run_in_executor(None, producer_task_sync, generator, text_queue, loop)
                 continue
 
@@ -156,13 +165,10 @@ def producer_task_sync(generator, text_queue, loop):
             if token is None:
                 if buffer:
                     loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "text", "data": buffer})
-                    loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "done"})
                     buffer = ''
-                    loop.call_soon_threadsafe(text_queue.put_nowait, None)
-                    break
-                else:
-                    loop.call_soon_threadsafe(text_queue.put_nowait, None)
-                    break
+                loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "done"})
+                loop.call_soon_threadsafe(text_queue.put_nowait, None)
+                break
             elif token in ["、", "。", "！", "？", "..."]:
                 if buffer:
                     if flag == 0:
@@ -180,6 +186,8 @@ def producer_task_sync(generator, text_queue, loop):
             print(f"procuder_task error: {e}")
             continue
     else:
-        loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "text", "data": buffer})
+        if buffer:
+            loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "text", "data": buffer})
+        loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "done"})
         loop.call_soon_threadsafe(text_queue.put_nowait, None)
         
