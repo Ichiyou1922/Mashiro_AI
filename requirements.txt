@@ -46,3 +46,6 @@ google-generativeai
 
 # pandas
 pandas
+
+# 学習データの取得用
+datasets

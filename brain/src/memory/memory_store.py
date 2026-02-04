@@ -2,7 +2,6 @@ import lancedb
 import time
 from pathlib import Path
 from .models import Memory, UserProfile
-import pandas
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 DB_PATH = ROOT_DIR / "data"
@@ -54,10 +53,17 @@ class MemoryStore():
         - .to_pandas()かSQL的クエリ
         - timestampで降順ソート
         """
-        df = self.table.to_pandas()
-        filtered = df[df["user_id"] == user_id]
-        return filtered.sort_values("timestamp", ascending=False).head(limit).to_dict("records")
-
+        dataset = self.table.to_lance()
+        results = (
+            dataset
+            .to_table(filter=f"user_id = {int(user_id)}")
+            .to_pandas()
+            .sort_values("timestamp", ascending=False)
+            .head(limit)
+            .to_dict("records")
+        )
+        return results
+    
 class UserProfileStore:
     def __init__(self):
         # schema=UserProfileで作成
@@ -78,14 +84,19 @@ class UserProfileStore:
             .execute([new_users])
         )
 
-    def get_name(self, user_id: int) -> str | None:
+    def get_name(self, user_id: int) -> str:
         """
         user_idから名前を取得
-        - .to_pandas()で全件取得->user_idでフィルタ
+        - user_idと紐付いた名前を1件取得 -> 登録されていないならそれを伝える文を
         """
-        df = self.table.to_pandas()
-        filtered = df[df["user_id"] == user_id]
-        if filtered.empty:
-            return None
-        return filtered["display_name"].iloc[0]
+        results = (
+            self.table
+            .search()
+            .where(f"user_id = {int(user_id)}")
+            .limit(1)
+            .to_list()
+        )
+        if not results:
+            return "ましろが名前を知らない人です"
+        return results[0]["display_name"]
 

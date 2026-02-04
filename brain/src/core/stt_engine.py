@@ -29,9 +29,9 @@ class STTEngine:
     
             print(f"Loading Whisper Model ({model_size}...)")
 
-            conpute_type = "int8" if device == "cpu" else "float16"
+            compute_type = "int8" if device == "cpu" else "float16"
 
-            loaded_whisper_obj = WhisperModel(model_size, device, compute_type=conpute_type)
+            loaded_whisper_obj = WhisperModel(model_size, device, compute_type=compute_type)
             self.whisper_model = loaded_whisper_obj
 
         self.model = model
@@ -40,7 +40,7 @@ class STTEngine:
             api_key=GROQ_KEY
         )
 
-        self.hallucinationTexts = [
+        self.hallucinationTexts = {
             "ご視聴ありがとうございました",
             "Thanks for watching",
             "저는 곤닉쳐고요",
@@ -49,7 +49,12 @@ class STTEngine:
             " 예 오전주경고가 있었다면 노이 프로젝트가 어른다고",
             "Thank you.",
             "Thank you!",
-        ]
+            "はい。",
+            "またお会いしましょう。",
+            "ご視聴ありがとうございました。",
+            "ありがとうございました。",
+            ""
+        }
 
         self.vad = VADEngine()
     
@@ -86,9 +91,9 @@ class STTEngine:
         bytesio.seek(0)
         
         transcription = self.client.audio.transcriptions.create(
-            file=("audio.wav", bytesio, "ausio/wav"),
+            file=("audio.wav", bytesio, "audio/wav"),
             model="whisper-large-v3-turbo",
-            prompt="えーと、あー、うーん等のフィラーも含めて書き起こしてください",   
+            prompt="えーと、あー、うーん等のフィラーも含めて書き起こしてください。「ましろ」という人名が出るので注意してください。",   
             response_format="json",                 
             language="ja",                          
             temperature=0.0,       

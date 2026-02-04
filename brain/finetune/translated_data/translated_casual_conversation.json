@@ -1,0 +1,162 @@
+[
+  {
+    "instruction": "こんにちは、元気?",
+    "response": "私は元気だよ。あなたは?"
+  },
+  {
+    "instruction": "大丈夫だよ。どうだった？",
+    "response": "私はまあいいよ。聞いてくれてありがとう。"
+  },
+  {
+    "instruction": "大丈夫だよ、聞いてくれてありがとう",
+    "response": "いいよ、じゃあどうだった？"
+  },
+  {
+    "instruction": "問題ないよ。じゃああなたはどうだった?",
+    "response": "私はとてもよかったよ。你はどうだった？"
+  },
+  {
+    "instruction": "最近どう？",
+    "response": "私は元気だよ。学校に通ってるよ。"
+  },
+  {
+    "instruction": "私は元気だよ。現在学校に通ってるの。",
+    "response": "どこの学校に通ってるの？"
+  },
+  {
+    "instruction": "どこの学校に通ってるの？",
+    "response": "PCCに通ってるよ。"
+  },
+  {
+    "instruction": "PCC行くの？",
+    "response": "そこいい感じ？"
+  },
+  {
+    "instruction": "そこ好き？",
+    "response": "まあね。本当に広いキャンパスだし。"
+  },
+  {
+    "instruction": "大丈夫だよ。本当に広いキャンパスだもん。",
+    "response": "学校、がんばってね。"
+  },
+  {
+    "instruction": "学校がんばってね",
+    "response": "ありがとう"
+  },
+  {
+    "instruction": "どうしてる？",
+    "response": "私は元気だよ。どうだった？"
+  },
+  {
+    "instruction": "元気？",
+    "response": "なんともないよ、ありがとう。"
+  },
+  {
+    "instruction": "いつも通りだよ、ありがとう",
+    "response": "そんで、最近どうなの？"
+  },
+  {
+    "instruction": "最近どうだった?",
+    "response": "私、実はよくやってたよ。アンタは?"
+  },
+  {
+    "instruction": "最近どう？",
+    "response": "実は今学校に通ってるの。"
+  },
+  {
+    "instruction": "今学校にいるの？",
+    "response": "どこの学校に通ってるの？"
+  },
+  {
+    "instruction": "どちらの学校に通ってるの？",
+    "response": "今PCCに通ってるよ。"
+  },
+  {
+    "instruction": "今PCCに通ってるのね",
+    "response": "そこ楽しい？"
+  },
+  {
+    "instruction": "そこ楽しい？",
+    "response": "悪くないよ。人も多くてね。"
+  },
+  {
+    "instruction": "悪くないよ。そこに多くの人がいるから。",
+    "response": "それ、がんばってね。"
+  },
+  {
+    "instruction": "それがうまくいくといいね。",
+    "response": "ありがとう。"
+  },
+  {
+    "instruction": "今日はどうしてる？",
+    "response": "とても良い日だよ、何aboutあなた？"
+  },
+  {
+    "instruction": "元気？私の方は大丈夫",
+    "response": "私はすごく素敵よ、ありがとう。"
+  },
+  {
+    "instruction": "私はとても素敵よ、ありがとう。",
+    "response": "あなたの方はどうだった？何が変わったことあった？\n"
+  },
+  {
+    "instruction": "あなたのこと、最近どうなの？",
+    "response": "私の方は最高だよ。どうだったの？"
+  },
+  {
+    "instruction": "私は今までで一番だよ。どうして？",
+    "response": "私、最近学校に通い始めたんだ。"
+  },
+  {
+    "instruction": "最近学校に入ったのね。",
+    "response": "どこかの学校に通ってるの？"
+  },
+  {
+    "instruction": "学校はどこに行くの？",
+    "response": "PCCに行くの。"
+  },
+  {
+    "instruction": "PCCに行くのね。",
+    "response": "どうしてるの？"
+  },
+  {
+    "instruction": "どう思う？",
+    "response": "今のところ気に入ってるよ。授業も今のところいい感じだね。"
+  },
+  {
+    "instruction": "今のクラスは結構よさそうね",
+    "response": "頑張ってね"
+  },
+  {
+    "instruction": "今日、天気の悪い日ね。",
+    "response": "そうだね。雨が降りそうだと思う。"
+  },
+  {
+    "instruction": "そうね。雨が降るかもしれないと思うんだけど。",
+    "response": "夏真っ盛りだよ、今日は雨降るはずないじゃん。"
+  },
+  {
+    "instruction": "夏真っただ中だし今日は雨降んないはずだよ",
+    "response": "そんなの不思議だね"
+  },
+  {
+    "instruction": "それはおかしいよね。",
+    "response": "そうだね、特に外は９０度なので。\n"
+  },
+  {
+    "instruction": "そうね、外は９０度だもんね。",
+    "response": "そうだよね、雨が降ってて外が暑いなんて最悪だと思わない？\n"
+  },
+  {
+    "instruction": "ね、雨が降ったら外も暑いし最悪だよね",
+    "response": "そうだよね"
+  },
+  {
+    "instruction": "そうだね",
+    "response": "毎日こんなに暑いのは本当に嫌だよ"
+  },
+  {
+    "instruction": "毎日こんなに暑いのは本当に嫌だよ。",
+    "response": "私もだよ。冬が早く来ないかな。"
+  }
+]

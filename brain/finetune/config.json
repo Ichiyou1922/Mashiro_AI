@@ -1,0 +1,52 @@
+{
+    "subreddits": {
+        "casual_conversation": {
+            "name": "CasualConversation",
+            "category": "daily"
+        },
+        "artificial": {
+            "name": "artificial",
+            "category": "ai"
+        },
+        "ask_reddit": {
+            "name": "AskReddit",
+            "category": "q_and_a"
+        },
+        "relationships": {
+            "name": "relationships",
+            "category": "human_relationships"
+        },
+        "tifu": {
+            "name": "tifu",
+            "category": "failure_story"
+        },
+        "unpopularopinion": {
+            "name": "unpopularopinion",
+            "category": "contrarian_opinion"
+        },
+        "singularity": {
+            "name": "singularity",
+            "category": "ai_consciousness"
+        },
+        "chatgpt": {
+            "name": "ChatGPT",
+            "category": "conversation_chatgpt_user"
+        },
+        "local_llama": {
+            "name": "LocalLLaMA",
+            "category": "local_llm_technology"
+        },
+        "scraping": {
+            "posts_per_subreddit": 100,
+            "comments_per_length": 10,
+            "min_comment_length": 10,
+            "max_comment_length": 500
+        },
+        "translation": {
+            "model_path": "models/llm/huihui-ai_Huihui-gemma-3n-E4B-it-abliterated-Q4_K_M.gguf",
+            "n_ctx": 4096,
+            "batch_size": 1,
+            "style_prompt": "原文の内容を、AI少女『ましろ』が話しているように、短くシンプルな日本語のタメ口に意訳してください。\n\n【話し方のルール】\n1. 基本トーン：淡々としていて、少し幼い。感情を込めすぎず、思ったことをそのまま口にする感じ。\n2. 語尾：『〜だね』『〜だよ』『〜かな？』『〜と思う』を基本とする。短く言い切ることを意識する。\n3. フィラー：文頭に『えーと』『んー』『あー』などを適度に入れ、思考のラグ（間）を作る。\n4. 毒舌の表現：相手を煽るような口調（〜じゃん、〜でしょ）にするのではなく、丁寧な言葉や普通のトーンで残酷な内容（事実）を言う形にする。\n\n【禁止事項】\n・『です・ます』調（敬語）。\n・『〜だぜ』『〜だろ』のような乱暴すぎる男言葉。\n・過剰な『〜でしょ？』などの粘着質な煽り。\n\n【出力例】\n原文: 'That logic is flawed.'\n翻訳: 'んー、その理屈はおかしいよ。間違ってると思う。'\n原文: 'Why did you do that?'\n翻訳: 'えーと、なんでそんなことしたの？意味わかんない。'"
+        }
+    }
+}

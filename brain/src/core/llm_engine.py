@@ -12,6 +12,12 @@ from google import genai
 from google.genai import types
 from memory.memory_store import MemoryStore, UserProfileStore
 import re
+from pathlib import Path
+from collections import deque
+
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+MODEL_PATH = ROOT_DIR / "models" / "llm"
+CONFIG_PATH = ROOT_DIR / "config"
 
 
 load_dotenv()
@@ -32,21 +38,22 @@ class LLMEngine:
         self.user_profile_store = UserProfileStore()
 
         # 設定ファイル読み込み
-        with open("/home/yoichi1922/src/github.com/Ichiyou1922/Mashiro_AI/brain/config/mashiro_config.json", "r", encoding="utf-8") as f: # システムプロンプト変えたらここも
+        with open(f"{CONFIG_PATH}/mashiro_config_temp.json", "r", encoding="utf-8") as f: # システムプロンプト変えたらここも
             config = json.load(f)
-
+        print("config loaded")
         self.system_prompt = self._build_prompt_without_examples(config)
-
+        self.system_message = [{"role": "system", "content": self.system_prompt}]
         # 会話履歴の初期化（Llama/Groq用）
-        self.history = [{"role": "system", "content": self.system_prompt}]
         for ex in config["examples"]:
-            self.history.append({"role": "user", "content": ex["user"]})
-            self.history.append({"role": "assistant", "content": ex["assistant"]})
+            self.system_message.append({"role": "user", "content": ex["user"]})
+            self.system_message.append({"role": "assistant", "content": ex["assistant"]})
+        
+        self.conversation_history = deque(maxlen=10)
 
         # ========== Llama (ローカル) ==========
         if backend == "llama":
             self.llm_path = os.path.expanduser(
-                "/home/yoichi1922/src/github.com/Ichiyou1922/Mashiro_AI/brain/models/llm/huihui-ai_Huihui-gemma-3n-E4B-it-abliterated-Q4_K_M.gguf"
+                f"{MODEL_PATH}/huihui-ai_Huihui-gemma-3n-E4B-it-abliterated-Q4_K_M.gguf"
             )
             self.llm_model = Llama(
                 model_path=self.llm_path,
@@ -118,16 +125,20 @@ class LLMEngine:
 [記憶]
 {memories_text}
         """
-        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}\n\n/no_think"
+        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}\n/no_think"
         # ========== Llama ==========
         if self.backend == "llama":
-            self.history.append({"role": "user", "content": full_context})
-            response = self.llm_model.create_chat_completion(
-                messages=cast(List[Any], self.history),
+            self.conversation_history.append({"role": "user", "content": full_context})
+            messages = self.system_message + list(self.conversation_history)
+            response = cast(dict[str, Any], self.llm_model.create_chat_completion(
+                messages=cast(List[Any], messages),
                 max_tokens=1024,
-                temperature=1.0,
+                temperature=0.9,
                 top_k=64,
                 top_p=0.95,
+                repeat_penalty=1.15,
+                frequency_penalty=0.3,
+                presence_penalty=0.2,
                 stream=False,
                 stop=[
                     # Gemma
@@ -146,8 +157,8 @@ class LLMEngine:
                     "[コンテキスト]",
                     "[/CONTEXT]",
                     ]
-            )
-            answer_text = response['choices'][0]['message']['content'] or ""
+            ))
+            answer_text: str = response['choices'][0]['message']['content'] or ""
             self.memory_store.add_memory(
                 text=f"{display_name}: {user_text} / ましろ: {answer_text}",
                 user_id=user_id,
@@ -159,9 +170,10 @@ class LLMEngine:
 
         # ========== Groq ==========
         elif self.backend == "groq":
-            self.history.append({"role": "user", "content": user_text})
+            self.conversation_history.append({"role": "user", "content": full_context})
+            messages = self.system_message + list(self.conversation_history)
             chat_completion = self.groq_client.chat.completions.create(
-                messages=self.history,
+                messages=cast(List[Any], messages),
                 model=self.groq_model,
                 temperature=0.9,
                 max_completion_tokens=256,
@@ -169,7 +181,7 @@ class LLMEngine:
                 stop=None,
                 stream=False,
             )
-            answer_text = chat_completion.choices[0].message.content or ""
+            answer_text: str = chat_completion.choices[0].message.content or ""
 
         # ========== Gemini ==========
         elif self.backend == "gemini":
@@ -184,13 +196,9 @@ class LLMEngine:
             answer_text = answer_text.replace(s, "")
         answer_text = answer_text.strip()
 
-        # 簡易的なヒストリー解放（Llama/Groq用）
+        # アシスタントの応答を履歴に追加
         if self.backend in ["llama", "groq"]:
-            while len(self.history) > 10:
-                print("Forgetting old memories...")
-                self.history.pop(1)
-            if answer_text:
-                self.history.append({"role": "assistant", "content": answer_text})
+            self.conversation_history.append({"role": "assistant", "content": answer_text})
 
         return answer_text
     
@@ -235,11 +243,12 @@ class LLMEngine:
 [記憶]
 {memories_text}
         """
-        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}/no_think"
-        self.history.append({"role": "user", "content": full_context})
+        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}\n/no_think"
+        self.conversation_history.append({"role": "user", "content": full_context})
+        messages = self.system_message + list(self.conversation_history)
 
         response = self.llm_model.create_chat_completion(
-            messages=cast(List[Any], self.history),
+            messages=cast(List[Any], messages),
             max_tokens=1024,
             temperature=1.0,
             top_k=64,
@@ -267,22 +276,19 @@ class LLMEngine:
         full_response = ""
         try:
             for chunk in response:
+                chunk = cast(dict[str, Any], chunk)
                 delta = chunk['choices'][0]['delta']
                 if 'content' in delta:
-                    content = delta['content']
+                    content: str = delta['content'] or ""
                     if content not in STOP_TOKENS:
                         full_response += content
                         yield content
 
-        finally:         
-            # 簡易的なヒストリー解放（Llama/Groq用）
-            if self.backend in ["llama", "groq"]:
-                while len(self.history) > 10:
-                    print("Forgetting old memories...")
-                    self.history.pop(1)
-                if full_response:
-                    print(full_response)
-                    self.history.append({"role": "assistant", "content": full_response})
+        finally:
+            # アシスタントの応答を履歴に追加
+            if full_response:
+                print(full_response)
+                self.conversation_history.append({"role": "assistant", "content": full_response})
             
             self.memory_store.add_memory(
                     text=f"{display_name}: {user_text} / ましろ: {full_response}",
@@ -293,7 +299,7 @@ class LLMEngine:
 
     def clear_memory(self):
         print("Clearing History")
-        self.history = [self.history[0]]  # system promptだけ残す
+        self.conversation_history.clear()
 
         # Geminiの場合はchatも再作成
         if self.backend == "gemini":

@@ -36,7 +36,8 @@ async def websocket_endpoint(websocket: WebSocket):
             await asyncio.gather(
                 receiver(websocket, audio_queue),
                 processor(audio_queue, websocket, text_queue),
-                audio_send(text_queue, websocket)
+                audio_send(text_queue, websocket),
+                return_exceptions=True
             )
 
     except Exception as e:
@@ -76,7 +77,7 @@ async def receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
                         text = msg["payload"]["text"]
                         print("テキストを受信したよ")
 
-                        response = await loop.run_in_executor(None, llm.generate, user_id, text, user_profile.get_name(user_id) or "User")
+                        response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
                         print("メッセージを生成したよ")
                         print(f"ましろ: {response}")
                         await websocket.send_text(create_text_response_message(response))
@@ -117,9 +118,15 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                 # audio_data_silero = await loop.run_in_executor(None, vad.convert_for_whisper, audio_data)
                 # text = await loop.run_in_executor(None, stt.transcribe, audio_data_silero)
                 text = await loop.run_in_executor(None, stt.groq_transcribe, audio_data)
+
+                if text is None or text.strip() == "":
+                    # ハルシネーションか無音 -> スキップする
+                    await websocket.send_text(create_state_message("idle"))
+                    continue 
+
                 print(f"{user_id}: {text}")
                 await websocket.send_text(create_subtitle_message(f"{user_id}: {text}", True))
-                generator = llm.generate_stream(user_id, text, user_profile.get_name(user_id) or "User")
+                generator = llm.generate_stream(user_id, str(text), user_profile.get_name(user_id) or "User")
                 await loop.run_in_executor(None, producer_task_sync, generator, text_queue, loop)
                 continue
 

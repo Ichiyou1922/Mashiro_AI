@@ -89,8 +89,9 @@ class MyAudioSink(voice_recv.AudioSink):
 
             # Processing中はスキップ
             if self.is_processing or self.ai_state == "speaking":
-                self.user_data[user_key]["buffer"].clear()
-                self.user_data[user_key]["is_speaking"] = False
+                for key in list(self.user_data.keys()):
+                    self.user_data[key]["buffer"].clear()
+                    self.user_data[key]["is_speaking"] = False
                 continue
 
             current_time = time.time()
