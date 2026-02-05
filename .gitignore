@@ -3,7 +3,6 @@ brain/models/
 brain/data/
 brain/data/log/
 body/assets/
-Plan
 ner/.venv/
 ner/models/
 __init__.py
@@ -19,3 +18,4 @@ __pycache__/
 .idea/
 .env
 .env.*
+CLAUDE.md
