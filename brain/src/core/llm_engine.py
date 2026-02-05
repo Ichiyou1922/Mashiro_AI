@@ -24,6 +24,8 @@ load_dotenv()
 
 GROQ_KEY = os.getenv("GROQ_API")
 GOOGLE_KEY = os.getenv("GOOGLE_API")
+config_name = "mashiro_config_v2.json"
+model_name = "mashiro_ai_v1.gguf"
 
 class LLMEngine:
     """
@@ -38,7 +40,7 @@ class LLMEngine:
         self.user_profile_store = UserProfileStore()
 
         # 設定ファイル読み込み
-        with open(f"{CONFIG_PATH}/mashiro_config_temp.json", "r", encoding="utf-8") as f: # システムプロンプト変えたらここも
+        with open(f"{CONFIG_PATH}/{config_name}", "r", encoding="utf-8") as f: # システムプロンプト変えたらここも
             config = json.load(f)
         print("config loaded")
         self.system_prompt = self._build_prompt_without_examples(config)
@@ -53,7 +55,7 @@ class LLMEngine:
         # ========== Llama (ローカル) ==========
         if backend == "llama":
             self.llm_path = os.path.expanduser(
-                f"{MODEL_PATH}/huihui-ai_Huihui-gemma-3n-E4B-it-abliterated-Q4_K_M.gguf"
+                f"{MODEL_PATH}/{model_name}"
             )
             self.llm_model = Llama(
                 model_path=self.llm_path,
@@ -313,23 +315,29 @@ class LLMEngine:
             )
 
     def _build_prompt_without_examples(self, config):
-        guidelines_text = "\n".join(config["guidelines"])
+        identity_text = "\n".join(config["identity"])
+        personality_text = "\n".join(config["personality"])
+        autonomy_text = "\n".join(config["autonomy"])
         speech_style_text = "\n".join(config["speech_style"])
+        constraints_text = "\n".join(config["constraints"])
 
         prompt = f"""
 Name: {config['name']}
 
-## Guidelines
-{guidelines_text}
+## Identity
+{identity_text}
+
+## Personality
+{personality_text}
+
+## Autonomy
+{autonomy_text}
 
 ## Speech Style
 {speech_style_text}
 
-## Thinking Style
-- **Do NOT use <think> tags.**
-- Speak your internal thoughts out loud as "monologues" or "fillers" in Japanese.
-- Example: "（えーと、それはね...）うん、わかった！"
-- Start responding immediately.
+## Constraints
+{constraints_text}
 
 /no_think
 """

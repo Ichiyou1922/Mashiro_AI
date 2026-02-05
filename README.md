@@ -25,3 +25,14 @@ pip install faster-whisper
 pip install -r requirements.txt
 ```
 
+- voicevoxの起動
+- cpu版
+```bash
+ docker run --rm -p 50021:50021 voicevox/voicevox_engine:cpu-ubuntu20.04-latest 
+```
+
+- gpu版
+```bash
+ docker run --rm --gpus all -p 50021:50021 voicevox/voicevox_engine:nvidia-ubuntu20.04-latest 
+
+```
