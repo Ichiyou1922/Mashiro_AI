@@ -127,7 +127,7 @@ class LLMEngine:
 [記憶]
 {memories_text}
         """
-        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}\n/no_think"
+        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}"
         # ========== Llama ==========
         if self.backend == "llama":
             self.conversation_history.append({"role": "user", "content": full_context})
@@ -245,7 +245,7 @@ class LLMEngine:
 [記憶]
 {memories_text}
         """
-        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}\n/no_think"
+        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}"
         self.conversation_history.append({"role": "user", "content": full_context})
         messages = self.system_message + list(self.conversation_history)
 
@@ -338,7 +338,5 @@ Name: {config['name']}
 
 ## Constraints
 {constraints_text}
-
-/no_think
 """
         return prompt.strip()

@@ -1,8 +1,7 @@
 import lancedb
 from pathlib import Path
 
-# このファイルの親の親 (brain/) の data/ を参照
-DB_PATH = Path(__file__).resolve().parent.parent / "data"
+DB_PATH = Path(__file__).resolve().parent.parent.parent.parent / "data"
 db = lancedb.connect(str(DB_PATH))
 table = db.open_table('mashiro_memory')
 df = table.to_pandas()
