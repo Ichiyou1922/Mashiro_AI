@@ -8,7 +8,7 @@ from typing import Literal, Optional
 ClientMessageType = Literal["audio_end", "interrupt", "cancel", "text_message"]
 
 # サーバー -> クライアントのメッセージタイプ
-ServerMessageType = Literal["state", "subtitle", "llm_token", "done", "error", "text_response"]
+ServerMessageType = Literal["state", "subtitle", "llm_token", "done", "error", "text_response", "emotion"]
 
 # AI状態
 AIState = Literal["idle", "listening", "thinking", "speaking"]
@@ -44,6 +44,12 @@ def create_error_message(message: str) -> str:
     return json.dumps({
         "type": "error",
         "payload": {"message": message}
+    })
+
+def create_emotion_message(emotion: str) -> str:
+    return json.dumps({
+        "type": "emotion",
+        "payload": {"emotion": emotion}
     })
 
 # メッセージ解析関数

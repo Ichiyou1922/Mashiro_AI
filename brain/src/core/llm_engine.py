@@ -3,6 +3,7 @@ import os
 # パス解決のおまじない
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from llama_cpp import Llama
+from llama_cpp.llama_chat_format import Qwen25VLChatHandler
 from dotenv import load_dotenv
 import os
 from typing import cast, List, Any
@@ -26,13 +27,14 @@ GROQ_KEY = os.getenv("GROQ_API")
 GOOGLE_KEY = os.getenv("GOOGLE_API")
 config_name = "mashiro_config_v2.json"
 model_name = "mashiro_ai_v1.gguf"
+mmproj_name = 'mashiro_ai_v2_1_mmproj.gguf'
 
 class LLMEngine:
     """
     LLMエンジン
     backend: "llama" | "groq" | "gemini"
     """
-    def __init__(self, backend: str = "gemini", n_ctx: int = 8192):
+    def __init__(self, backend: str = "llama", n_ctx: int = 8192):
         self.backend = backend
 
         # 記憶関連
@@ -63,7 +65,7 @@ class LLMEngine:
                 n_ctx=n_ctx,
                 # cache_type_k="q8_0",
                 # cache_type_v="q8_0",
-                # chat_format = "chatml"
+                # chat_format = "chatml",
                 chat_format="gemma",
                 verbose=False
             )
@@ -100,14 +102,6 @@ class LLMEngine:
 
         past_memories = self.memory_store.search_memory(user_text)
 
-        # Debug
-        """
-        if past_memories:
-            print(f"[RAG Hit] {past_memories['user_name']}: {past_memories['text']}")
-        else:
-            print("[No RAG hit]")
-        """
-
         # 記憶を整形
         if past_memories:
             memories_list = []
@@ -135,7 +129,7 @@ class LLMEngine:
             response = cast(dict[str, Any], self.llm_model.create_chat_completion(
                 messages=cast(List[Any], messages),
                 max_tokens=1024,
-                temperature=0.9,
+                temperature=1.0,
                 top_k=64,
                 top_p=0.95,
                 repeat_penalty=1.15,
@@ -204,7 +198,7 @@ class LLMEngine:
 
         return answer_text
     
-    def generate_stream(self,user_id: int, user_text: str, user_name: str = 'User'):
+    def generate_stream(self, user_id: int, user_text: str, user_name: str = 'User'):
         """ストリーミング生成（Llama専用）"""
         if self.backend != "llama":
             raise NotImplementedError(f"generate_stream is not supported for {self.backend}")
@@ -217,14 +211,6 @@ class LLMEngine:
         past_memories = self.memory_store.search_memory(user_text)
 
         STOP_TOKENS = {'<|im_end|>', '<|endoftext|>', '<end_of_turn>', '<start_of_turn>', '</s>', '[INST]', '[/INST]', '<s>'}
-
-        # Debug
-        """
-        if past_memories:
-            print(f"[RAG Hit] {past_memories['user_name']}: {past_memories['text']}")
-        else:
-            print("[No RAG hit]")
-        """
 
         # 記憶を整形
         if past_memories:
@@ -320,6 +306,7 @@ class LLMEngine:
         autonomy_text = "\n".join(config["autonomy"])
         speech_style_text = "\n".join(config["speech_style"])
         constraints_text = "\n".join(config["constraints"])
+        tool_text = "\n".join(config["tools"])
 
         prompt = f"""
 Name: {config['name']}
@@ -338,5 +325,8 @@ Name: {config['name']}
 
 ## Constraints
 {constraints_text}
+
+## Tools
+{tool_text}
 """
         return prompt.strip()

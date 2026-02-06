@@ -17,7 +17,7 @@ class CasualConversationDownloader:
         # {'Unnamed: 0': Value('int64'), 'question': Value('string'), 'answer': Value('string')}
         ds = load_dataset("SohamGhadge/casual-conversation", split="train")
         list_data = []
-        '''
+        
         for i in ds['Unnamed: 0']:
             data = ds[i]
             list_data.append({
@@ -30,6 +30,7 @@ class CasualConversationDownloader:
                 "instruction": row['question'],
                 "response": row['answer']
             })
+        '''
         return list_data
     
     def save(self, data: list, filename: str = 'casual_conversation.json'):

@@ -288,6 +288,7 @@ async def on_message(message: discord.Message):
         ))
         print("websocketにメッセージを送信")
     try:
+        emotion_data = await text_ws.recv()
         response_data = await text_ws.recv()
         response = parse_client_message(str(response_data))
         reply = response["payload"]["text"]

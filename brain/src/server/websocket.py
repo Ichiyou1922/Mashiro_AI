@@ -3,7 +3,7 @@ import sys
 # パス解決のおまじない
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI, WebSocket
-from .protocol import create_state_message,create_subtitle_message, parse_client_message, create_error_message, create_done_message, create_text_response_message
+from .protocol import create_state_message,create_subtitle_message, parse_client_message, create_error_message, create_done_message, create_text_response_message, create_emotion_message
 import websockets
 import asyncio
 from core.llm_engine import LLMEngine
@@ -12,6 +12,9 @@ from core.tts_engine import TTSEngine
 from core.vad_engine import VADEngine
 import struct
 from memory.memory_store import UserProfileStore
+from utils.text_parser import parse_emotion
+from utils.tool_parser import parse_tool
+from utils.tools import execute
 
 app = FastAPI()
 
@@ -36,7 +39,7 @@ async def websocket_endpoint(websocket: WebSocket):
             await asyncio.gather(
                 receiver(websocket, audio_queue),
                 processor(audio_queue, websocket, text_queue),
-                audio_send(text_queue, websocket),
+                message_send(text_queue, websocket),
                 return_exceptions=True
             )
 
@@ -78,11 +81,19 @@ async def receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
                         print("テキストを受信したよ")
 
                         response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
+                        result = parse_tool(response)
+                        if result in ["time_tool", "date_tool"]:
+                            tool_result = execute(result)
+                            response = await loop.run_in_executor(None, llm.generate, user_id, f"[ツール実行結果] {tool_result}", user_profile.get_name(user_id) or "User")
+                        
                         print("メッセージを生成したよ")
-                        print(f"ましろ: {response}")
-                        await websocket.send_text(create_text_response_message(response))
+                        clean_text, emotion = parse_emotion(response)
+                        print(f"ましろemotion: {emotion}")
+                        print(f"ましろtext: {clean_text}")
+                        await websocket.send_text(create_emotion_message(emotion))
+                        await websocket.send_text(create_text_response_message(clean_text))
                         print("Discordに流したよ")
-                    
+
                     elif msg["type"] == "interrupt":
                         # TODO: 割り込み処理
                         pass
@@ -134,7 +145,7 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
         print(f"processor error: {e}")
         await text_queue.put(None)
 
-async def audio_send(text_queue: asyncio.Queue, websocket: WebSocket):
+async def message_send(text_queue: asyncio.Queue, websocket: WebSocket):
     while True:
         data = await text_queue.get()
         try:
@@ -154,6 +165,16 @@ async def audio_send(text_queue: asyncio.Queue, websocket: WebSocket):
                     await websocket.send_bytes(audio)
                     continue
             
+            elif data["type"] == "emotion":
+                emotion = data["data"]
+                print(f"emotion: {emotion}")
+                if emotion is None:
+                    await websocket.send_text(create_emotion_message("neutral"))
+                    continue 
+                else:
+                    await websocket.send_text(create_emotion_message(emotion))
+                    continue
+            
             elif data["type"] == "done":
                 await websocket.send_text(create_done_message())
                 continue
@@ -167,6 +188,7 @@ def producer_task_sync(generator, text_queue, loop):
     buffer = ''
     full_text = ''
     flag = 0
+    emotion_flag = 0
     for token in generator:
         try:
             if token is None:
@@ -176,6 +198,7 @@ def producer_task_sync(generator, text_queue, loop):
                 loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "done"})
                 loop.call_soon_threadsafe(text_queue.put_nowait, None)
                 break
+
             elif token in ["、", "。", "！", "？", "..."]:
                 if buffer:
                     if flag == 0:
@@ -187,6 +210,18 @@ def producer_task_sync(generator, text_queue, loop):
                 else:
                     print("buffer is empty")
                     continue
+
+            elif token == '[' or emotion_flag >= 1:
+                emotion_flag += 1
+                if token == ']':
+                    loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "emotion", "data": buffer.strip('[]')})
+                    buffer = ''
+                    emotion_flag = 0
+                    continue
+  
+                buffer += token
+                
+
             else:
                 buffer += token
         except Exception as e:

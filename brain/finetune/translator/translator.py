@@ -66,6 +66,9 @@ class ConversationTranslator:
             max_tokens=256,
             response_format={"type": "json_object"}
         )
+        
+        if response.choices[0].message.content is None:
+            return None
 
         return json.loads(response.choices[0].message.content)
     
