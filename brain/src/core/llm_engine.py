@@ -25,7 +25,7 @@ load_dotenv()
 GROQ_KEY = os.getenv("GROQ_API")
 GOOGLE_KEY = os.getenv("GOOGLE_API")
 config_name = "mashiro_config_v2.json"
-model_name = "mashiro_q4_k_m.gguf"
+model_name = "mashiro_ai_v5.gguf"
 
 class LLMEngine:
     """
@@ -59,12 +59,12 @@ class LLMEngine:
             )
             self.llm_model = Llama(
                 model_path=self.llm_path,
-                n_gpu_layers=25, # -1だと全レイヤーをGPUに
+                n_gpu_layers=-1, # -1だと全レイヤーをGPUに
                 n_ctx=n_ctx,
                 # cache_type_k="q8_0",
                 # cache_type_v="q8_0",
-                # chat_format = "chatml",
-                chat_format="gemma",
+                chat_format = "chatml",
+                # chat_format="gemma",
                 verbose=False
             )
 
@@ -131,9 +131,9 @@ class LLMEngine:
                 temperature=1.0,
                 top_k=64,
                 top_p=0.95,
-                repeat_penalty=1.15,
-                frequency_penalty=0.3,
-                presence_penalty=0.2,
+                # repeat_penalty=1.15,
+                # frequency_penalty=0.3,
+                # presence_penalty=0.2,
                 stream=False,
                 stop=[
                     # Gemma
