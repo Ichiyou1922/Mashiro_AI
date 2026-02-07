@@ -14,7 +14,7 @@ import struct
 from memory.memory_store import UserProfileStore
 from utils.text_parser import parse_emotion
 from utils.tool_parser import parse_tool
-from utils.tools import execute
+from utils.tools import execute, vision_tool
 
 app = FastAPI()
 
@@ -78,13 +78,20 @@ async def receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
                     elif msg["type"] == "text_message":
                         user_id = msg["payload"]["user_id"]
                         text = msg["payload"]["text"]
+                        image_url = msg["payload"].get("image_url") # getを使うとキーがない場合にNoneを返してくれる
                         print("テキストを受信したよ")
+
+                        if image_url:
+                            vision_text = await loop.run_in_executor(None, vision_tool.analyze_image, image_url)
+                            text = f"{text} [画像の説明]: {vision_text}"
+
+                        print(f"{user_profile.get_name(user_id)}: {text}")
 
                         response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
                         result = parse_tool(response)
                         if result in ["time_tool", "date_tool"]:
                             tool_result = execute(result)
-                            response = await loop.run_in_executor(None, llm.generate, user_id, f"[ツール実行結果] {tool_result}", user_profile.get_name(user_id) or "User")
+                            response = await loop.run_in_executor(None, llm.generate, user_id, f"{text} [ツール実行結果] {tool_result}", user_profile.get_name(user_id) or "User")
                         
                         print("メッセージを生成したよ")
                         clean_text, emotion = parse_emotion(response)

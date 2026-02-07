@@ -277,6 +277,11 @@ async def on_message(message: discord.Message):
     if message.content.startswith("!"):
         await bot.process_commands(message)
         return
+    
+    if message.attachments:
+        image_url = message.attachments[0].url
+    else:
+        image_url = None
 
     print(f"User: {message.content}")
     print(f"user_id: {message.author.id}")
@@ -285,6 +290,7 @@ async def on_message(message: discord.Message):
         await text_ws.send(create_text_message(
             message.author.id,
             message.content,
+            image_url
         ))
         print("websocketにメッセージを送信")
     try:

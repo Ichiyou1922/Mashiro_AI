@@ -5,7 +5,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from llama_cpp import Llama
 from llama_cpp.llama_chat_format import Qwen25VLChatHandler
 from dotenv import load_dotenv
-import os
 from typing import cast, List, Any
 import json
 from groq import Groq
@@ -26,15 +25,14 @@ load_dotenv()
 GROQ_KEY = os.getenv("GROQ_API")
 GOOGLE_KEY = os.getenv("GOOGLE_API")
 config_name = "mashiro_config_v2.json"
-model_name = "mashiro_ai_v1.gguf"
-mmproj_name = 'mashiro_ai_v2_1_mmproj.gguf'
+model_name = "mashiro_q4_k_m.gguf"
 
 class LLMEngine:
     """
     LLMエンジン
     backend: "llama" | "groq" | "gemini"
     """
-    def __init__(self, backend: str = "llama", n_ctx: int = 8192):
+    def __init__(self, backend: str = "llama", n_ctx: int = 4096):
         self.backend = backend
 
         # 記憶関連
@@ -61,7 +59,7 @@ class LLMEngine:
             )
             self.llm_model = Llama(
                 model_path=self.llm_path,
-                n_gpu_layers=-1,
+                n_gpu_layers=25, # -1だと全レイヤーをGPUに
                 n_ctx=n_ctx,
                 # cache_type_k="q8_0",
                 # cache_type_v="q8_0",
@@ -121,6 +119,7 @@ class LLMEngine:
 [記憶]
 {memories_text}
         """
+        print(context_prompt)
         full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}"
         # ========== Llama ==========
         if self.backend == "llama":

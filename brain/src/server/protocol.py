@@ -57,8 +57,18 @@ def parse_client_message(data: str) -> dict:
     """クライアントからのJSONメッセージを解析"""
     return json.loads(data)
 
-def create_text_message(user_id, text):
+def create_text_message(user_id, text, image_url=None):
     """discordからのメッセージを作成"""
+    if image_url:
+        return json.dumps({
+            "type": "text_message",
+            "payload": {
+                "user_id": user_id,
+                "text": text,
+                "image_url": image_url
+            }
+        })
+    
     return json.dumps({
         "type": "text_message",
         "payload": {
