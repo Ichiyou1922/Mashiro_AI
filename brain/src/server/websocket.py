@@ -11,10 +11,12 @@ from core.stt_engine import STTEngine
 from core.tts_engine import TTSEngine
 from core.vad_engine import VADEngine
 import struct
-from memory.memory_store import UserProfileStore
+from memory.memory_store import UserProfileStore, memory_store
 from utils.text_parser import parse_emotion
 from utils.tool_parser import parse_tool
 from utils.tools import execute, vision_tool
+from memory.reflection import ReflectionManager
+
 
 app = FastAPI()
 
@@ -26,6 +28,8 @@ tts = TTSEngine()
 vad = VADEngine()
 
 user_profile = UserProfileStore()
+
+reflection = ReflectionManager()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -40,12 +44,29 @@ async def websocket_endpoint(websocket: WebSocket):
                 receiver(websocket, audio_queue),
                 processor(audio_queue, websocket, text_queue),
                 message_send(text_queue, websocket),
+                reflection_timer(websocket),
                 return_exceptions=True
             )
 
     except Exception as e:
         print(f"WebSocket disconnected: {e}")
         await websocket.close()
+
+async def reflection_timer(websocket: WebSocket):
+    loop = asyncio.get_event_loop()
+    if reflection.check_and_trigger(memory_store.get_importance_sum(since=reflection.last_reflection_at)):
+        await websocket.send_text(create_state_message("sleeping"))
+        await loop.run_in_executor(None, reflection.perform_reflection)
+        await websocket.send_text(create_state_message("idle"))
+    
+    while True:
+        await asyncio.sleep(1800)
+        importance_sum = memory_store.get_importance_sum(since=reflection.last_reflection_at)
+        if reflection.check_and_trigger(importance_sum) is False:
+            continue
+        await websocket.send_text(create_state_message("sleeping"))
+        await loop.run_in_executor(None, reflection.perform_reflection)
+        await websocket.send_text(create_state_message("idle"))
 
 # 受信タスク
 async def receiver(websocket: WebSocket, audio_queue: asyncio.Queue):

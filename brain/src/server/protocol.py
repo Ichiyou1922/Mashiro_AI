@@ -11,7 +11,7 @@ ClientMessageType = Literal["audio_end", "interrupt", "cancel", "text_message"]
 ServerMessageType = Literal["state", "subtitle", "llm_token", "done", "error", "text_response", "emotion"]
 
 # AI状態
-AIState = Literal["idle", "listening", "thinking", "speaking"]
+AIState = Literal["idle", "listening", "thinking", "speaking", "sleeping"]
 
 # メッセージ作成関数
 def create_state_message(state: AIState) -> str:

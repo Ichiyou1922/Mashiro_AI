@@ -19,12 +19,19 @@ class Memory(LanceModel):
     # MetaData
     user_id: int # discord user ID
     user_name: str
-    role: str
+    role: str # "user_message" | "assistant_message" | "reflection" | "self_talk" | "observation" | "plan"
     timestamp: float
 
     # extension
     # emotion: str = "neutral"
     source: str = "discord"
+
+    # memory stream
+    importance: float = 0.0 # 0.0 = 未評価, 1-10を正規化
+    last_accessed: float = 0.0 # 最終参照時刻
+    access_count: int = 0
+    is_reflection: bool = False
+    parent_ids: str = "" # 統合元の記憶ID
 
 class UserProfile(LanceModel):
     user_id: int

@@ -3,17 +3,11 @@ import os
 # パス解決のおまじない
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from llama_cpp import Llama
-from llama_cpp.llama_chat_format import Qwen25VLChatHandler
 from dotenv import load_dotenv
 from typing import cast, List, Any
 import json
-from groq import Groq
-from google import genai
-from google.genai import types
-from memory.memory_store import MemoryStore, UserProfileStore
-import re
+from memory.memory_store import MemoryStore, UserProfileStore, memory_store
 from pathlib import Path
-from collections import deque
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 MODEL_PATH = ROOT_DIR / "models" / "llm"
@@ -22,22 +16,22 @@ CONFIG_PATH = ROOT_DIR / "config"
 
 load_dotenv()
 
-GROQ_KEY = os.getenv("GROQ_API")
-GOOGLE_KEY = os.getenv("GOOGLE_API")
 config_name = "mashiro_config_v2.json"
 model_name = "mashiro_ai_v5.gguf"
 
 class LLMEngine:
     """
     LLMエンジン
-    backend: "llama" | "groq" | "gemini"
+    backend: "llama"
     """
     def __init__(self, backend: str = "llama", n_ctx: int = 4096):
         self.backend = backend
 
         # 記憶関連
-        self.memory_store = MemoryStore()
         self.user_profile_store = UserProfileStore()
+        self.last_assistant_timestamp = None
+        self.NEGATIVE_KEYWORDS = ["やめて", "違う", "そうじゃない", "嫌い", "違う"]
+        self.counter = 0
 
         # 設定ファイル読み込み
         with open(f"{CONFIG_PATH}/{config_name}", "r", encoding="utf-8") as f: # システムプロンプト変えたらここも
@@ -45,12 +39,10 @@ class LLMEngine:
         print("config loaded")
         self.system_prompt = self._build_prompt_without_examples(config)
         self.system_message = [{"role": "system", "content": self.system_prompt}]
-        # 会話履歴の初期化（Llama/Groq用）
+        # 会話履歴の初期化
         for ex in config["examples"]:
             self.system_message.append({"role": "user", "content": ex["user"]})
             self.system_message.append({"role": "assistant", "content": ex["assistant"]})
-        
-        self.conversation_history = deque(maxlen=10)
 
         # ========== Llama (ローカル) ==========
         if backend == "llama":
@@ -68,26 +60,6 @@ class LLMEngine:
                 verbose=False
             )
 
-        # ========== Groq ==========
-        elif backend == "groq":
-            self.groq_client = Groq(
-                api_key=os.environ.get("GROQ_API_KEY", f"{GROQ_KEY}")
-            )
-            self.groq_model = "llama-3.1-8b-instant"
-
-        # ========== Gemini ==========
-        elif backend == "gemini":
-            self.gemini_client = genai.Client(api_key=GOOGLE_KEY)
-            self.gemini_model = "gemini-2.5-flash"
-            self.gemini_chat = self.gemini_client.chats.create(
-                model=self.gemini_model,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.system_prompt,
-                    temperature=0.7,
-                    max_output_tokens=256,
-                )
-            )
-
         else:
             raise ValueError(f"Unknown backend: {backend}")
 
@@ -98,33 +70,37 @@ class LLMEngine:
         saved_name = self.user_profile_store.get_name(user_id=user_id)
         display_name = saved_name if saved_name else user_name
 
-        past_memories = self.memory_store.search_memory(user_text)
+        if any(kw in user_text for kw in self.NEGATIVE_KEYWORDS):
+            delta = -0.2
+            if self.last_assistant_timestamp is not None:
+                memory_store.adjust_importance(self.last_assistant_timestamp, delta=delta)
+            else:
+                print("[generate] timestampの取得に失敗しました。")
 
-        # 記憶を整形
-        if past_memories:
-            memories_list = []
-            for m in past_memories:
-                formatted_memory = m['text'].replace(chr(10), ' / ')
-                memories_list.append(formatted_memory)
+        memories = memory_store.search_with_score(user_text)
 
-            memories_text = "\n".join(memories_list)
+        if memories:
+            sorted_memories = sorted(memories, key=lambda m: m["timestamp"])
+            memory_lines = []
+            for m in sorted_memories:
+                if m["role"] == "user_message":
+                    memory_lines.append(f"{m['user_name']}: {m['text']}")
+                elif m["role"] == "assistant_message":
+                    memory_lines.append(f"ましろ: {m['text']}")
+            memory_content = "\n".join(memory_lines)
         else:
-            memories_text = "なし"
+            memory_content = "なし"
+        
+        # ユーザー発言 + コンテキスト
+        full_message = f"""[記憶]
+{memory_content}
 
-        context_prompt = f"""
-[基本情報]
-- ユーザーの名前: {display_name}
-- あなたの名前: ましろ
-
-[記憶]
-{memories_text}
-        """
-        print(context_prompt)
-        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}"
+[現在の発言]
+{display_name}: {user_text}
+"""
+        messages = self.system_message + [{"role": "user", "content": full_message}]
         # ========== Llama ==========
         if self.backend == "llama":
-            self.conversation_history.append({"role": "user", "content": full_context})
-            messages = self.system_message + list(self.conversation_history)
             response = cast(dict[str, Any], self.llm_model.create_chat_completion(
                 messages=cast(List[Any], messages),
                 max_tokens=1024,
@@ -154,34 +130,23 @@ class LLMEngine:
                     ]
             ))
             answer_text: str = response['choices'][0]['message']['content'] or ""
-            self.memory_store.add_memory(
-                text=f"{display_name}: {user_text} / ましろ: {answer_text}",
+            memory_store.add_memory(
+                text=user_text,
                 user_id=user_id,
                 user_name=display_name,
-                role="interaction"
+                role="user_message"
             )
-        
-        
-
-        # ========== Groq ==========
-        elif self.backend == "groq":
-            self.conversation_history.append({"role": "user", "content": full_context})
-            messages = self.system_message + list(self.conversation_history)
-            chat_completion = self.groq_client.chat.completions.create(
-                messages=cast(List[Any], messages),
-                model=self.groq_model,
-                temperature=0.9,
-                max_completion_tokens=256,
-                top_p=1,
-                stop=None,
-                stream=False,
+            # adjust_importanceのためにtimestampを保持
+            self.last_assistant_timestamp = memory_store.add_memory(
+                text=answer_text,
+                user_id=user_id,
+                user_name=display_name,
+                role="assistant_message"
             )
-            answer_text: str = chat_completion.choices[0].message.content or ""
-
-        # ========== Gemini ==========
-        elif self.backend == "gemini":
-            response = self.gemini_chat.send_message(user_text)
-            answer_text = response.text or ""
+            self.counter += 1
+            if self.counter >= 20:
+                memory_store.evaluate_importance()
+                self.counter = 0
 
         else:
             raise ValueError(f"Unknown backend: {self.backend}")
@@ -190,49 +155,49 @@ class LLMEngine:
         for s in ["<|im_end|>", "<|endoftext|>", "<think>", "</think>", "<end_of_turn>", "<start_of_turn>"]:
             answer_text = answer_text.replace(s, "")
         answer_text = answer_text.strip()
-
-        # アシスタントの応答を履歴に追加
-        if self.backend in ["llama", "groq"]:
-            self.conversation_history.append({"role": "assistant", "content": answer_text})
-
         return answer_text
     
     def generate_stream(self, user_id: int, user_text: str, user_name: str = 'User'):
         """ストリーミング生成（Llama専用）"""
         if self.backend != "llama":
             raise NotImplementedError(f"generate_stream is not supported for {self.backend}")
+        
+        STOP_TOKENS = {'<|im_end|>', '<|endoftext|>', '<end_of_turn>', '<start_of_turn>', '</s>', '[INST]', '[/INST]', '<s>'}
 
         print("Thinking...")
 
         saved_name = self.user_profile_store.get_name(user_id=user_id)
         display_name = saved_name if saved_name else user_name
 
-        past_memories = self.memory_store.search_memory(user_text)
+        if any(kw in user_text for kw in self.NEGATIVE_KEYWORDS):
+            delta = -0.2
+            if self.last_assistant_timestamp is not None:
+                memory_store.adjust_importance(self.last_assistant_timestamp, delta=delta)
+            else:
+                print("[generate] timestampの取得に失敗しました。")
 
-        STOP_TOKENS = {'<|im_end|>', '<|endoftext|>', '<end_of_turn>', '<start_of_turn>', '</s>', '[INST]', '[/INST]', '<s>'}
+        memories = memory_store.search_with_score(user_text)
 
-        # 記憶を整形
-        if past_memories:
-            memories_list = []
-            for m in past_memories:
-                formatted_memory = m['text'].replace(chr(10), ' / ')
-                memories_list.append(formatted_memory)
-
-            memories_text = "\n".join(memories_list)
+        if memories:
+            sorted_memories = sorted(memories, key=lambda m: m["timestamp"])
+            memory_lines = []
+            for m in sorted_memories:
+                if m["role"] == "user_message":
+                    memory_lines.append(f"{m['user_name']}: {m['text']}")
+                elif m["role"] == "assistant_message":
+                    memory_lines.append(f"ましろ: {m['text']}")
+            memory_content = "\n".join(memory_lines)
         else:
-            memories_text = "なし"
+            memory_content = "なし"
+        
+        # ユーザー発言 + コンテキスト
+        full_message = f"""[記憶]
+{memory_content}
 
-        context_prompt = f"""
-[基本情報]
-- ユーザーの名前: {display_name}
-- あなたの名前: ましろ
-
-[記憶]
-{memories_text}
-        """
-        full_context = f"[コンテキスト]\n{context_prompt}\n\n[{display_name}の発言]\n{user_text}"
-        self.conversation_history.append({"role": "user", "content": full_context})
-        messages = self.system_message + list(self.conversation_history)
+[現在の発言]
+{display_name}: {user_text}
+"""
+        messages = self.system_message + [{"role": "user", "content": full_message}]
 
         response = self.llm_model.create_chat_completion(
             messages=cast(List[Any], messages),
@@ -273,31 +238,22 @@ class LLMEngine:
 
         finally:
             # アシスタントの応答を履歴に追加
-            if full_response:
-                print(full_response)
-                self.conversation_history.append({"role": "assistant", "content": full_response})
-            
-            self.memory_store.add_memory(
-                    text=f"{display_name}: {user_text} / ましろ: {full_response}",
-                    user_id=user_id,
-                    user_name=display_name,
-                    role="interaction"
-                )
-
-    def clear_memory(self):
-        print("Clearing History")
-        self.conversation_history.clear()
-
-        # Geminiの場合はchatも再作成
-        if self.backend == "gemini":
-            self.gemini_chat = self.gemini_client.chats.create(
-                model=self.gemini_model,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.system_prompt,
-                    temperature=0.7,
-                    max_output_tokens=256,
-                )
+            memory_store.add_memory(
+                text=user_text,
+                user_id=user_id,
+                user_name=display_name,
+                role="user_message"
             )
+            self.last_assistant_timestamp = memory_store.add_memory(
+                text=full_response,
+                user_id=user_id,
+                user_name=display_name,
+                role="assistant_message"
+            )
+            self.counter += 1
+            if self.counter >= 20:
+                memory_store.evaluate_importance()
+                self.counter = 0
 
     def _build_prompt_without_examples(self, config):
         identity_text = "\n".join(config["identity"])
