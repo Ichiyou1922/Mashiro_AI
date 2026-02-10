@@ -85,6 +85,11 @@ JSON形式で回答:
         
         raw_content = str(response.choices[0].message.content)
         cleaned_content = re.sub(r'<think>.*?</think>', '', raw_content, flags=re.DOTALL)
+        match = re.search(r'\{(.+)\}', cleaned_content, flags=re.DOTALL)
+        if match is None:
+            print("evaluate_importanceで出力形式が正しく無いです")
+            return
+        cleaned_content = match.group(0)
         cleaned_content = cleaned_content.strip()
         print(cleaned_content)
         try:

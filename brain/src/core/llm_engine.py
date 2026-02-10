@@ -17,14 +17,14 @@ CONFIG_PATH = ROOT_DIR / "config"
 load_dotenv()
 
 config_name = "mashiro_config_v2.json"
-model_name = "mashiro_ai_v5.gguf"
+model_name = "mashiro_v9.gguf"
 
 class LLMEngine:
     """
     LLMエンジン
     backend: "llama"
     """
-    def __init__(self, backend: str = "llama", n_ctx: int = 4096):
+    def __init__(self, backend: str = "llama", n_ctx: int = 2048):
         self.backend = backend
 
         # 記憶関連
@@ -53,10 +53,11 @@ class LLMEngine:
                 model_path=self.llm_path,
                 n_gpu_layers=-1, # -1だと全レイヤーをGPUに
                 n_ctx=n_ctx,
-                # cache_type_k="q8_0",
-                # cache_type_v="q8_0",
-                chat_format = "chatml",
-                # chat_format="gemma",
+                # cache_type_k="q4_0",
+                # cache_type_v="q4_0",
+                # chat_format = "qwen",
+                chat_format="llama-3",
+                flash_attn=True,
                 verbose=False
             )
 
@@ -65,7 +66,9 @@ class LLMEngine:
 
         print(f"LLM 準備完了 (backend: {backend})")
 
-    def generate(self, user_id: int, user_text: str, user_name: str = "User") -> str:
+    def generate(self, user_id: int, user_text: str, user_name: str="User", 
+             save_user: bool=True, tool_context=None) -> str:
+
         print("Thinking...")
         saved_name = self.user_profile_store.get_name(user_id=user_id)
         display_name = saved_name if saved_name else user_name
@@ -80,6 +83,8 @@ class LLMEngine:
         memories = memory_store.search_with_score(user_text)
 
         if memories:
+            timestamps = [memory["timestamp"] for memory in memories]
+            memory_store.mark_accessed(timestamps)
             sorted_memories = sorted(memories, key=lambda m: m["timestamp"])
             memory_lines = []
             for m in sorted_memories:
@@ -98,7 +103,15 @@ class LLMEngine:
 [現在の発言]
 {display_name}: {user_text}
 """
-        messages = self.system_message + [{"role": "user", "content": full_message}]
+        print(full_message)
+        if tool_context is None:
+            messages = self.system_message + [{"role": "user", "content": full_message}]
+        else:
+            messages = self.system_message + [
+                {"role": "user", "content": full_message},
+                {"role": "assistant", "content": tool_context["tool_call_text"]},
+                {"role": "ipython", "content": tool_context["tool_result"]}
+                ]
         # ========== Llama ==========
         if self.backend == "llama":
             response = cast(dict[str, Any], self.llm_model.create_chat_completion(
@@ -130,12 +143,13 @@ class LLMEngine:
                     ]
             ))
             answer_text: str = response['choices'][0]['message']['content'] or ""
-            memory_store.add_memory(
-                text=user_text,
-                user_id=user_id,
-                user_name=display_name,
-                role="user_message"
-            )
+            if save_user == True:
+                memory_store.add_memory(
+                    text=user_text,
+                    user_id=user_id,
+                    user_name=display_name,
+                    role="user_message"
+                )
             # adjust_importanceのためにtimestampを保持
             self.last_assistant_timestamp = memory_store.add_memory(
                 text=answer_text,
@@ -151,6 +165,7 @@ class LLMEngine:
         else:
             raise ValueError(f"Unknown backend: {self.backend}")
 
+        print(f"[Debuf] ましろ生: {answer_text}")
         # 特殊トークンの除去
         for s in ["<|im_end|>", "<|endoftext|>", "<think>", "</think>", "<end_of_turn>", "<start_of_turn>"]:
             answer_text = answer_text.replace(s, "")
@@ -179,6 +194,8 @@ class LLMEngine:
         memories = memory_store.search_with_score(user_text)
 
         if memories:
+            timestamps = [memory["timestamp"] for memory in memories]
+            memory_store.mark_accessed(timestamps)
             sorted_memories = sorted(memories, key=lambda m: m["timestamp"])
             memory_lines = []
             for m in sorted_memories:

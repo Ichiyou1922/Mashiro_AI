@@ -1,9 +1,9 @@
 import re
 
-# text = "<tool>time_tool</tool>"
+# text = "<function=time_tool>{{}}</function>"
 
-def parse_tool(text: str) -> str | None:
-    match = re.search(r'<tool>(.+?)</tool>', text)
+def parse_tool(text: str) -> dict | str | None:
+    match = re.search(r'<function=(.+?)>{(.*)}</function>', text)
     tools = [
         "time_tool",
         "date_tool"
@@ -11,9 +11,11 @@ def parse_tool(text: str) -> str | None:
 
     if match:
         tool = match.group(1)
+        param = match.group(2)
         if tool in tools:
             print(f"function calling: {tool}")
-            return tool
+            print(f"param: {param}")
+            return {"tool_name": tool, "param": param}
         else:
             print("function is not found")
             return None

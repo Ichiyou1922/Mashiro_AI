@@ -110,9 +110,14 @@ async def receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
 
                         response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
                         result = parse_tool(response)
-                        if result in ["time_tool", "date_tool"]:
-                            tool_result = execute(result)
-                            response = await loop.run_in_executor(None, llm.generate, user_id, f"{text} [ツール実行結果] {tool_result}", user_profile.get_name(user_id) or "User")
+                        if type(result) is dict:
+                            if result["tool_name"] in ["time_tool", "date_tool"]:
+                                tool_result = execute(result["tool_name"])
+                                tool_context = {
+                                    "tool_call_text": f"<function={result['tool_name']}>{{{result['param']}}}</function>",
+                                    "tool_result": tool_result,
+                                }
+                                response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, tool_context)
                         
                         print("メッセージを生成したよ")
                         clean_text, emotion = parse_emotion(response)

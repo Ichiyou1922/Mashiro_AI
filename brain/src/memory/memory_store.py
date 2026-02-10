@@ -176,11 +176,17 @@ JSON形式で回答: [{{"id": 1, "score": 5}}, ...]
 
         raw_content = str(response.choices[0].message.content)
         cleaned_content = re.sub(r'<think>.*?</think>', '', raw_content, flags=re.DOTALL)
+        match = re.search(r'\[(.+)\]', cleaned_content, flags=re.DOTALL)
+        if match is None:
+            print("evaluate_importanceで出力形式が正しく無いです")
+            return
+        cleaned_content = match.group(0)
         cleaned_content = cleaned_content.strip()
         try:
             scores_data = json.loads(cleaned_content)
         except Exception as e:
             print(f"evaluate_importance error: {e}")
+            print(json.loads(cleaned_content))
             return
 
         timestamps = []
@@ -190,6 +196,7 @@ JSON形式で回答: [{{"id": 1, "score": 5}}, ...]
             scores.append(item["score"])
         
         self.update_importance(timestamps, scores)
+        print("importance評価が完了しました")
 
     def adjust_importance(self, timestamp: float, delta: float):
         """importanceを増減する(-1.0~1.0の範囲で)"""
