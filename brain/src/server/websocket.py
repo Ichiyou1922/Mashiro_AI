@@ -16,6 +16,7 @@ from utils.text_parser import parse_emotion
 from utils.tool_parser import parse_tool
 from utils.tools import execute, vision_tool
 from memory.reflection import ReflectionManager
+import re
 
 
 app = FastAPI()
@@ -30,6 +31,8 @@ vad = VADEngine()
 user_profile = UserProfileStore()
 
 reflection = ReflectionManager()
+
+importance_counter = 0
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -75,6 +78,7 @@ async def receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
     - バイナリ -> 音声データ -> audio_queue
     - テキスト -> JSON制御メッセージ -> 処理分岐
     """
+    global importance_counter
     try:
         while True:
             # WebSocketから受信(バイナリ/テキスト)
@@ -110,14 +114,22 @@ async def receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
 
                         response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
                         result = parse_tool(response)
+
+                        importance_counter += 1
+                        if importance_counter >= 20:
+                            asyncio.ensure_future(loop.run_in_executor(None, memory_store.evaluate_importance))
+                            importance_counter = 0
+
+                        print(result)
                         if type(result) is dict:
                             if result["tool_name"] in ["time_tool", "date_tool"]:
                                 tool_result = execute(result["tool_name"])
-                                tool_context = {
-                                    "tool_call_text": f"<function={result['tool_name']}>{{{result['param']}}}</function>",
-                                    "tool_result": tool_result,
+                                print(tool_result)
+                                include_tool_text = {
+                                    "mashiro_function_calling": response,
+                                    "tool_result": tool_result
                                 }
-                                response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, tool_context)
+                                response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
                         
                         print("メッセージを生成したよ")
                         clean_text, emotion = parse_emotion(response)
@@ -150,6 +162,7 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
     - textをLLMにかけて結果をtext
     """
     loop = asyncio.get_event_loop()
+    global importance_counter
 
     try:
         while True:
@@ -170,8 +183,43 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
 
                 print(f"{user_id}: {text}")
                 await websocket.send_text(create_subtitle_message(f"{user_id}: {text}", True))
-                generator = llm.generate_stream(user_id, str(text), user_profile.get_name(user_id) or "User")
-                await loop.run_in_executor(None, producer_task_sync, generator, text_queue, loop)
+                # stream
+                # generator = llm.generate_stream(user_id, str(text), user_profile.get_name(user_id) or "User")
+                # await loop.run_in_executor(None, producer_task_sync, generator, text_queue, loop)
+
+                # generate
+                response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
+                result = parse_tool(response)
+
+                importance_counter += 1
+                if importance_counter >= 20:
+                    asyncio.ensure_future(loop.run_in_executor(None, memory_store.evaluate_importance))
+                    importance_counter = 0
+
+                print(result)
+                if type(result) is dict:
+                    if result["tool_name"] in ["time_tool", "date_tool"]:
+                        tool_result = execute(result["tool_name"])
+                        print(tool_result)
+                        include_tool_text = {
+                            "mashiro_function_calling": response,
+                            "tool_result": tool_result
+                        }
+                        response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
+                        
+                print("メッセージを生成したよ")
+                clean_text, emotion = parse_emotion(response)
+                print(f"ましろemotion: {emotion}")
+                print(f"ましろtext: {clean_text}")
+                
+                parsed_result = []
+                parsed_result = re.split('([、。？！…]|\.{3}|\.{6})', clean_text)
+                await text_queue.put({"type": "state", "state": "speaking"})
+                await text_queue.put({"type": "emotion", "data": emotion})
+                for text in parsed_result:
+                    if text.strip():
+                        await text_queue.put({"type": "text", "data": text})
+                await text_queue.put({"type": "done"})
                 continue
 
     except Exception as e:

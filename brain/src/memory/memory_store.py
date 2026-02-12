@@ -5,6 +5,8 @@ from .models import Memory, UserProfile
 from . import client
 import json
 import re
+from collections import deque
+
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 DB_PATH = ROOT_DIR / "data"
@@ -16,6 +18,7 @@ print(f"DB Connected at: {DB_PATH}")
 class MemoryStore():
     def __init__(self):
        self.table = db.create_table("mashiro_memory", schema=Memory, exist_ok=True)
+       self.short_term = deque(maxlen=12)
 
     def add_memory(self, text, user_id, user_name, role):
         current_time = time.time()
@@ -34,6 +37,13 @@ class MemoryStore():
             "parent_ids": ""
 
         }])
+
+        self.short_term.append({
+            "text": text,
+            "role": role,
+            "user_name": user_name,
+            "timestamp": current_time
+        })
         return current_time
 
     def search_memory(self, query: str, limit: int = 5):
@@ -62,12 +72,31 @@ class MemoryStore():
             .to_dict("records")
         )
         return results
+
+    def get_reflection(self, limit=3):
+        results = (
+            self.table
+            .search()
+            .where("is_reflection = True")
+            .limit(limit * 3)
+            .to_list()
+        )
+        sorted_results = sorted(results, key=lambda x: x["timestamp"], reverse=True)
+        return sorted_results[:limit]
+
+        
     
-    def search_with_score(self, query: str, limit: int = 10) -> list | None:
+    def get_short_term(self) -> list:
+        return list(self.short_term)
+    
+    def search_with_score(self, query: str, limit: int = 4) -> list | None:
         """recency * importance * relevanceでスコアリング検索"""
         current_time = time.time()
+        short_terms = self.get_short_term()
+        remove_timestamps = {item["timestamp"] for item in short_terms}
         # relevance 重視で候補を取得
-        candidates = self.table.search(query).limit(limit * 5).to_list()
+        candidates = self.table.search(query).limit(limit * 3).to_list()
+        candidates = [c for c in candidates if c["timestamp"] not in remove_timestamps]
 
         before_sort = []
 
@@ -75,17 +104,21 @@ class MemoryStore():
         for memory in candidates:
             recency = 0.995 ** ((current_time - memory["last_accessed"]) / 1200.0) # 20分を目安に計算
             importance = memory["importance"] # 正規化済み
-            relevance = 1.0 - memory["_distance"] / 2.0
+            relevance = 1.0 - memory["_distance"]
 
             score = recency + importance + relevance
             before_sort.append([memory, score])
 
         sorted_list = sorted(before_sort, key=lambda x: x[1], reverse=True)
+        reflection_list = [rl for rl in sorted_list if rl[0]["is_reflection"] == True]
+        memory_list = [ml for ml in sorted_list if ml[0]["is_reflection"] == False]
 
-        if sorted_list is None:
+        result_list = reflection_list[:1] + memory_list
+
+        if result_list is None:
             return None
         
-        return [row[0] for row in sorted_list][:limit]
+        return [row[0] for row in result_list][:limit]
 
     def update_importance(self, timestamps: list, scores: list):
         """バッチでimportance更新"""
@@ -124,7 +157,7 @@ class MemoryStore():
                 .execute([updates])
             )
 
-    def get_pending_evaluation(self, limit: int = 30) -> list:
+    def get_pending_evaluation(self, limit: int = 50) -> list:
         """importance未評価の記憶を取得"""
         result = (
             self.table
@@ -137,7 +170,7 @@ class MemoryStore():
     
     def evaluate_importance(self):
         """impotance未評価の記憶を評価する"""
-        pending = self.get_pending_evaluation(limit=30)
+        pending = self.get_pending_evaluation(limit=50)
         if not pending:
             return
         

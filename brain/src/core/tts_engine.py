@@ -23,7 +23,7 @@ class TTSEngine:
             sock_read=25 # レスポンスの読み取り
         )
 
-        print("Synthesizing...")
+        # print("Synthesizing...")
         try:
             query_payload = {"text": text, "speaker": self.speaker_id}
             async with aiohttp.ClientSession(timeout=timeout) as session:

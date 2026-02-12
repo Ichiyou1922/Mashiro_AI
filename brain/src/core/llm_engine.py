@@ -16,8 +16,9 @@ CONFIG_PATH = ROOT_DIR / "config"
 
 load_dotenv()
 
-config_name = "mashiro_config_v2.json"
-model_name = "mashiro_v9.gguf"
+config_name = "mashiro_config_v3.json"
+model_name = "mashiro_v10.gguf"
+MASHIRO_ID = int(os.getenv("MASHIRO_ID"))
 
 class LLMEngine:
     """
@@ -38,12 +39,14 @@ class LLMEngine:
             config = json.load(f)
         print("config loaded")
         self.system_prompt = self._build_prompt_without_examples(config)
-        self.system_message = [{"role": "system", "content": self.system_prompt}]
+        # self.system_message = [{"role": "system", "content": self.system_prompt}]
+
+        '''
         # 会話履歴の初期化
         for ex in config["examples"]:
             self.system_message.append({"role": "user", "content": ex["user"]})
             self.system_message.append({"role": "assistant", "content": ex["assistant"]})
-
+        '''
         # ========== Llama (ローカル) ==========
         if backend == "llama":
             self.llm_path = os.path.expanduser(
@@ -77,11 +80,13 @@ class LLMEngine:
             delta = -0.2
             if self.last_assistant_timestamp is not None:
                 memory_store.adjust_importance(self.last_assistant_timestamp, delta=delta)
+                print("importanceを減少させました。")
             else:
                 print("[generate] timestampの取得に失敗しました。")
 
-        memories = memory_store.search_with_score(user_text)
+        # memories = memory_store.search_with_score(user_text, limit=3)
 
+        """
         if memories:
             timestamps = [memory["timestamp"] for memory in memories]
             memory_store.mark_accessed(timestamps)
@@ -91,38 +96,65 @@ class LLMEngine:
                 if m["role"] == "user_message":
                     memory_lines.append(f"{m['user_name']}: {m['text']}")
                 elif m["role"] == "assistant_message":
-                    memory_lines.append(f"ましろ: {m['text']}")
+                    memory_lines.append(f"{m['user_name']}: {m['text']}")
             memory_content = "\n".join(memory_lines)
         else:
             memory_content = "なし"
-        
-        # ユーザー発言 + コンテキスト
-        full_message = f"""[記憶]
-{memory_content}
-
-[現在の発言]
-{display_name}: {user_text}
-"""
-        print(full_message)
-        if tool_context is None:
-            messages = self.system_message + [{"role": "user", "content": full_message}]
+        """
+        reflections = memory_store.get_reflection(limit=3)
+        if reflections:
+            reflection_text = "\n".join([f"- {r['text']}" for r in reflections])
+            print("===reflection===")
+            print(reflection_text)
+            system_content = self.system_prompt + f"\n\n## Memory\n{reflection_text}"
         else:
-            messages = self.system_message + [
-                {"role": "user", "content": full_message},
-                {"role": "assistant", "content": tool_context["tool_call_text"]},
-                {"role": "ipython", "content": tool_context["tool_result"]}
-                ]
+            system_content = self.system_prompt
+        
+        system_messages = [{"role": "system", "content": system_content}]
+
+        memory_lines = []
+        short_memory = memory_store.get_short_term()
+        if short_memory:
+            for sm in short_memory:
+                if sm["role"] == "user_message":
+                    memory_lines.append({"role": "user", "content": f"{sm['user_name']}: {sm['text']}"})
+                elif sm["role"] == "assistant_message":
+                    memory_lines.append({"role": "assistant", "content": f"{sm['text']}"})
+        
+        reversed_memory_lines = memory_lines[-3:]
+        query_line = ''
+        for item in reversed_memory_lines:
+            query_line += str(item['content'])
+        query_line += user_text
+        scored_memory = memory_store.search_with_score(query=query_line, limit=4)
+        scored_memory_lines = []
+        if scored_memory:
+            for sm in scored_memory:
+                if sm["role"] == "user_message":
+                    scored_memory_lines.append({"role": "user", "content": f"{sm['user_name']}: {sm['text']}"})
+                elif sm["role"] == "assistant_message":
+                    scored_memory_lines.append({"role": "assistant", "content": f"{sm['text']}"})
+        print("===scored memory===")
+        print(f"{scored_memory_lines}")
+        print("===memory===")
+        print(memory_lines)
+        if tool_context is not None:
+            messages = system_messages + scored_memory_lines + memory_lines + [{"role": "assistant", "content": tool_context["mashiro_function_calling"]}] + [{"role": "ipython", "content": tool_context["tool_result"]}]
+            print(messages)
+        else:
+            messages = system_messages + memory_lines + [{"role": "user", "content": f"{self.user_profile_store.get_name(user_id)}の発言" + user_text}]
+        
         # ========== Llama ==========
         if self.backend == "llama":
             response = cast(dict[str, Any], self.llm_model.create_chat_completion(
                 messages=cast(List[Any], messages),
                 max_tokens=1024,
                 temperature=1.0,
-                top_k=64,
-                top_p=0.95,
-                # repeat_penalty=1.15,
-                # frequency_penalty=0.3,
-                # presence_penalty=0.2,
+                #top_k=64,
+                #top_p=0.95,
+                repeat_penalty=1.1,
+                frequency_penalty=0.3,
+                presence_penalty=0.2,
                 stream=False,
                 stop=[
                     # Gemma
@@ -150,26 +182,25 @@ class LLMEngine:
                     user_name=display_name,
                     role="user_message"
                 )
-            # adjust_importanceのためにtimestampを保持
-            self.last_assistant_timestamp = memory_store.add_memory(
-                text=answer_text,
-                user_id=user_id,
-                user_name=display_name,
-                role="assistant_message"
-            )
-            self.counter += 1
-            if self.counter >= 20:
-                memory_store.evaluate_importance()
-                self.counter = 0
-
+    
         else:
             raise ValueError(f"Unknown backend: {self.backend}")
 
-        print(f"[Debuf] ましろ生: {answer_text}")
+        # print(f"[Debug] ましろ生: {answer_text}")
         # 特殊トークンの除去
-        for s in ["<|im_end|>", "<|endoftext|>", "<think>", "</think>", "<end_of_turn>", "<start_of_turn>"]:
-            answer_text = answer_text.replace(s, "")
-        answer_text = answer_text.strip()
+        if '<function=' not in answer_text:
+            for s in ["<|im_end|>", "<|endoftext|>", "<think>", "</think>", "<end_of_turn>", "<start_of_turn>"]:
+                answer_text = answer_text.replace(s, "")
+            for s in ["ましろ:", "ましろ：", "[ツール実行結果]"]:
+                answer_text = answer_text.removeprefix(s)
+            answer_text = answer_text.strip()
+            # adjust_importanceのためにtimestampを保持
+            self.last_assistant_timestamp = memory_store.add_memory(
+                text=answer_text,
+                user_id=MASHIRO_ID,
+                user_name="ましろ",
+                role="assistant_message"
+            )
         return answer_text
     
     def generate_stream(self, user_id: int, user_text: str, user_name: str = 'User'):
@@ -191,7 +222,7 @@ class LLMEngine:
             else:
                 print("[generate] timestampの取得に失敗しました。")
 
-        memories = memory_store.search_with_score(user_text)
+        memories = memory_store.search_with_score(user_text, limit=5)
 
         if memories:
             timestamps = [memory["timestamp"] for memory in memories]
@@ -202,14 +233,29 @@ class LLMEngine:
                 if m["role"] == "user_message":
                     memory_lines.append(f"{m['user_name']}: {m['text']}")
                 elif m["role"] == "assistant_message":
-                    memory_lines.append(f"ましろ: {m['text']}")
+                    memory_lines.append(f"{m['user_name']}: {m['text']}")
             memory_content = "\n".join(memory_lines)
         else:
             memory_content = "なし"
         
+        short_memory = memory_store.get_short_term()
+        if short_memory:
+            memory_lines = []
+            for sm in short_memory:
+                if sm["role"] == "user_message":
+                    memory_lines.append(f"{sm['user_name']}: {sm['text']}")
+                elif sm["role"] == "assistant_message":
+                    memory_lines.append(f"{sm['user_name']}: {sm['text']}")
+            short_memory_context = "\n".join(memory_lines)
+        else:
+            short_memory_context = "なし"
+
         # ユーザー発言 + コンテキスト
-        full_message = f"""[記憶]
+        full_message = f"""[長期記憶]
 {memory_content}
+
+[短期記憶]
+{short_memory_context}
 
 [現在の発言]
 {display_name}: {user_text}
@@ -252,6 +298,7 @@ class LLMEngine:
                     if content not in STOP_TOKENS:
                         full_response += content
                         yield content
+            print(f"ましろ: {full_response}")
 
         finally:
             # アシスタントの応答を履歴に追加
@@ -263,8 +310,8 @@ class LLMEngine:
             )
             self.last_assistant_timestamp = memory_store.add_memory(
                 text=full_response,
-                user_id=user_id,
-                user_name=display_name,
+                user_id=MASHIRO_ID,
+                user_name="ましろ",
                 role="assistant_message"
             )
             self.counter += 1

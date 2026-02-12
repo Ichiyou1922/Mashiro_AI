@@ -15,7 +15,7 @@ def parse_tool(text: str) -> dict | str | None:
         if tool in tools:
             print(f"function calling: {tool}")
             print(f"param: {param}")
-            return {"tool_name": tool, "param": param}
+            return {"tool_name": tool, "param": f"{{{param}}}"}
         else:
             print("function is not found")
             return None

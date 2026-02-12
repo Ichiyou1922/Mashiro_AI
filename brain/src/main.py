@@ -20,6 +20,7 @@ import json
 
 logging.getLogger("discord").setLevel(logging.WARNING)
 logging.getLogger("discord.ext.voice_recv").setLevel(logging.WARNING)
+os.environ["AV_LOG_LEVEL"] = "quiet"
 
 load_dotenv()
 
@@ -28,6 +29,8 @@ bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
 reconnect_enabled = True  # 再接続フラグ。
 
 profile = UserProfileStore()
+
+text_response_queue = asyncio.Queue()
 
 
 # def remove_thoughts(text: str) -> str:
@@ -251,7 +254,7 @@ async def player_task(audio_queue, vc, loop):
             audio_source = discord.FFmpegPCMAudio(io.BytesIO(audio_data), pipe=True)
             vc.play(audio_source, after=after_callback)
             await done_event.wait()
-            print("再生終了")
+            # print("再生終了")
         except Exception as e:
             print(f"player_taskで例外が発生しました: {e}")
             break
@@ -262,11 +265,29 @@ async def start_fastapi():
     server = uvicorn.Server(config)
     await server.serve()
 
+async def text_ws_receiver(ws):
+    """receive all text_ws message and split it"""
+    while True:
+        data = await ws.recv()
+        message = parse_client_message(data)
+
+        if message["type"] == "text_response":
+            text_response_queue.put_nowait(message["payload"]["text"])
+        elif message["type"] == "state":
+            print(f"text_ws_receiver AIState: {message['payload']['state']}")
+        elif message["type"] == "emotion":
+            print(f"text_ws_receiver emotion: {message['payload']['emotion']}")
+        elif message["type"] == "error":
+            print(f"text_ws_receiver error: {message['payload']['message']}")
+        else:
+            print(f"receive unknown message: message type is {message['type']}")
+
 # ========== Bot Events ==========
 @bot.event
 async def on_ready():
     global text_ws
     text_ws = await websockets.connect("ws://localhost:8000/ws")
+    asyncio.create_task(text_ws_receiver(text_ws))
     print('Logged in as Mashiro')
 
 @bot.event
@@ -292,12 +313,9 @@ async def on_message(message: discord.Message):
             message.content,
             image_url
         ))
+        reply = await text_response_queue.get()
         print("websocketにメッセージを送信")
     try:
-        emotion_data = await text_ws.recv()
-        response_data = await text_ws.recv()
-        response = parse_client_message(str(response_data))
-        reply = response["payload"]["text"]
         if not reply:
             print("Empty reply generated. Skipping.")
             return 

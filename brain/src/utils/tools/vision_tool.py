@@ -19,7 +19,7 @@ def analyze_image(url: str) -> str:
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "この画像を日本語で説明してください。特徴的な部分があれば強調してください。"},
+                {"type": "text", "text": "この画像を日本語で簡単に説明してください。特徴的な部分があれば強調してください。"},
                 {"type": "image_url", "image_url": {"url": url}}
             ]
         }
