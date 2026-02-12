@@ -3,6 +3,7 @@ brain/models/
 brain/data/
 brain/data/log/
 brain/src/garbage/
+brain/src/test/
 body/assets/
 ner/.venv/
 ner/models/
