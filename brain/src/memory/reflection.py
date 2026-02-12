@@ -78,7 +78,7 @@ JSON形式で回答:
                     "content": f"{prompt}",
                 }
             ],
-            model="qwen/qwen3-32b"
+            model="llama-3.3-70b-versatile"
         )
 
         if response is None:

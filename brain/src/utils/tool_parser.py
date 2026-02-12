@@ -13,6 +13,7 @@ def parse_tool(text: str) -> dict | str | None:
         tool = match.group(1)
         param = match.group(2)
         if tool in tools:
+            print("===function calling!===")
             print(f"function calling: {tool}")
             print(f"param: {param}")
             return {"tool_name": tool, "param": f"{{{param}}}"}

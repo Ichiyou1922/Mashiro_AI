@@ -25,7 +25,7 @@ class LLMEngine:
     LLMエンジン
     backend: "llama"
     """
-    def __init__(self, backend: str = "llama", n_ctx: int = 2048):
+    def __init__(self, backend: str = "llama", n_ctx: int = 4096):
         self.backend = backend
 
         # 記憶関連
@@ -126,7 +126,7 @@ class LLMEngine:
         for item in reversed_memory_lines:
             query_line += str(item['content'])
         query_line += user_text
-        scored_memory = memory_store.search_with_score(query=query_line, limit=4)
+        scored_memory = memory_store.search_with_score(query=query_line, limit=2)
         scored_memory_lines = []
         if scored_memory:
             for sm in scored_memory:
@@ -135,14 +135,14 @@ class LLMEngine:
                 elif sm["role"] == "assistant_message":
                     scored_memory_lines.append({"role": "assistant", "content": f"{sm['text']}"})
         print("===scored memory===")
-        print(f"{scored_memory_lines}")
+        print(scored_memory_lines)
         print("===memory===")
         print(memory_lines)
         if tool_context is not None:
             messages = system_messages + scored_memory_lines + memory_lines + [{"role": "assistant", "content": tool_context["mashiro_function_calling"]}] + [{"role": "ipython", "content": tool_context["tool_result"]}]
             print(messages)
         else:
-            messages = system_messages + memory_lines + [{"role": "user", "content": f"{self.user_profile_store.get_name(user_id)}の発言" + user_text}]
+            messages = system_messages + scored_memory_lines + memory_lines + [{"role": "user", "content": f"{self.user_profile_store.get_name(user_id)}の発言" + user_text}]
         
         # ========== Llama ==========
         if self.backend == "llama":
@@ -202,122 +202,6 @@ class LLMEngine:
                 role="assistant_message"
             )
         return answer_text
-    
-    def generate_stream(self, user_id: int, user_text: str, user_name: str = 'User'):
-        """ストリーミング生成（Llama専用）"""
-        if self.backend != "llama":
-            raise NotImplementedError(f"generate_stream is not supported for {self.backend}")
-        
-        STOP_TOKENS = {'<|im_end|>', '<|endoftext|>', '<end_of_turn>', '<start_of_turn>', '</s>', '[INST]', '[/INST]', '<s>'}
-
-        print("Thinking...")
-
-        saved_name = self.user_profile_store.get_name(user_id=user_id)
-        display_name = saved_name if saved_name else user_name
-
-        if any(kw in user_text for kw in self.NEGATIVE_KEYWORDS):
-            delta = -0.2
-            if self.last_assistant_timestamp is not None:
-                memory_store.adjust_importance(self.last_assistant_timestamp, delta=delta)
-            else:
-                print("[generate] timestampの取得に失敗しました。")
-
-        memories = memory_store.search_with_score(user_text, limit=5)
-
-        if memories:
-            timestamps = [memory["timestamp"] for memory in memories]
-            memory_store.mark_accessed(timestamps)
-            sorted_memories = sorted(memories, key=lambda m: m["timestamp"])
-            memory_lines = []
-            for m in sorted_memories:
-                if m["role"] == "user_message":
-                    memory_lines.append(f"{m['user_name']}: {m['text']}")
-                elif m["role"] == "assistant_message":
-                    memory_lines.append(f"{m['user_name']}: {m['text']}")
-            memory_content = "\n".join(memory_lines)
-        else:
-            memory_content = "なし"
-        
-        short_memory = memory_store.get_short_term()
-        if short_memory:
-            memory_lines = []
-            for sm in short_memory:
-                if sm["role"] == "user_message":
-                    memory_lines.append(f"{sm['user_name']}: {sm['text']}")
-                elif sm["role"] == "assistant_message":
-                    memory_lines.append(f"{sm['user_name']}: {sm['text']}")
-            short_memory_context = "\n".join(memory_lines)
-        else:
-            short_memory_context = "なし"
-
-        # ユーザー発言 + コンテキスト
-        full_message = f"""[長期記憶]
-{memory_content}
-
-[短期記憶]
-{short_memory_context}
-
-[現在の発言]
-{display_name}: {user_text}
-"""
-        messages = self.system_message + [{"role": "user", "content": full_message}]
-
-        response = self.llm_model.create_chat_completion(
-            messages=cast(List[Any], messages),
-            max_tokens=1024,
-            temperature=1.0,
-            top_k=64,
-            top_p=0.95,
-            stream=True,
-            stop=[
-                # Gemma
-                "<end_of_turn>",
-                "<start_of_turn>",
-                # ChatML (Qwen等)
-                "<|im_end|>",
-                "<|endoftext|>",
-                # Llama
-                "</s>",
-                "[INST]",
-                "[/INST]",
-                "<s>",
-                # 共通
-                "\nUser:",
-                "[コンテキスト]",
-                "[/CONTEXT]",
-                ]
-        )
-
-        full_response = ""
-        try:
-            for chunk in response:
-                chunk = cast(dict[str, Any], chunk)
-                delta = chunk['choices'][0]['delta']
-                if 'content' in delta:
-                    content: str = delta['content'] or ""
-                    if content not in STOP_TOKENS:
-                        full_response += content
-                        yield content
-            print(f"ましろ: {full_response}")
-
-        finally:
-            # アシスタントの応答を履歴に追加
-            memory_store.add_memory(
-                text=user_text,
-                user_id=user_id,
-                user_name=display_name,
-                role="user_message"
-            )
-            self.last_assistant_timestamp = memory_store.add_memory(
-                text=full_response,
-                user_id=MASHIRO_ID,
-                user_name="ましろ",
-                role="assistant_message"
-            )
-            self.counter += 1
-            if self.counter >= 20:
-                memory_store.evaluate_importance()
-                self.counter = 0
 
     def _build_prompt_without_examples(self, config):
         identity_text = "\n".join(config["identity"])

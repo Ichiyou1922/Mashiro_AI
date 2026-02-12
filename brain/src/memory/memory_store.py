@@ -18,7 +18,7 @@ print(f"DB Connected at: {DB_PATH}")
 class MemoryStore():
     def __init__(self):
        self.table = db.create_table("mashiro_memory", schema=Memory, exist_ok=True)
-       self.short_term = deque(maxlen=12)
+       self.short_term = deque(maxlen=16)
 
     def add_memory(self, text, user_id, user_name, role):
         current_time = time.time()

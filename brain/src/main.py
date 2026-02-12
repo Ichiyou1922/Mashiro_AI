@@ -9,7 +9,6 @@ import asyncio
 import torch
 import time
 import io
-import re
 import logging
 import uvicorn
 import server.websocket as fastapi
@@ -17,6 +16,7 @@ import websockets
 import struct
 from server.protocol import parse_client_message, create_state_message, create_text_message
 import json
+import re
 
 logging.getLogger("discord").setLevel(logging.WARNING)
 logging.getLogger("discord.ext.voice_recv").setLevel(logging.WARNING)
@@ -39,8 +39,9 @@ text_response_queue = asyncio.Queue()
 #     return cleaned_text.strip()
 
 def remove_thoughts(text: str) -> str:
-    text = text.replace("<think>", "").replace("</think>", "")
-    return text.strip()
+    pattern = r"<think>.*?</think>"
+    cleaned_text = re.sub(pattern, "", text, flags=re.DOTALL)
+    return cleaned_text.strip()
 
 # ========== AudioSink ==========
 class MyAudioSink(voice_recv.AudioSink):
@@ -304,8 +305,8 @@ async def on_message(message: discord.Message):
     else:
         image_url = None
 
-    print(f"User: {message.content}")
-    print(f"user_id: {message.author.id}")
+    # print(f"User: {message.content}")
+    # print(f"user_id: {message.author.id}")
 
     async with message.channel.typing():
         await text_ws.send(create_text_message(
@@ -315,6 +316,10 @@ async def on_message(message: discord.Message):
         ))
         reply = await text_response_queue.get()
         print("websocketにメッセージを送信")
+
+    if reply:
+        reply = remove_thoughts(reply)
+
     try:
         if not reply:
             print("Empty reply generated. Skipping.")

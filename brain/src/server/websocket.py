@@ -209,6 +209,7 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                         
                 print("メッセージを生成したよ")
                 clean_text, emotion = parse_emotion(response)
+                print("===ましろ応答===")
                 print(f"ましろemotion: {emotion}")
                 print(f"ましろtext: {clean_text}")
                 
