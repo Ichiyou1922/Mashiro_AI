@@ -8,6 +8,7 @@ from typing import cast, List, Any
 import json
 from memory.memory_store import MemoryStore, UserProfileStore, memory_store
 from pathlib import Path
+import re
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 MODEL_PATH = ROOT_DIR / "models" / "llm"
@@ -25,7 +26,7 @@ class LLMEngine:
     LLMエンジン
     backend: "llama"
     """
-    def __init__(self, backend: str = "llama", n_ctx: int = 4096):
+    def __init__(self, backend: str = "llama", n_ctx: int = 2048):
         self.backend = backend
 
         # 記憶関連
@@ -140,7 +141,7 @@ class LLMEngine:
         print(memory_lines)
         if tool_context is not None:
             messages = system_messages + scored_memory_lines + memory_lines + [{"role": "assistant", "content": tool_context["mashiro_function_calling"]}] + [{"role": "ipython", "content": tool_context["tool_result"]}]
-            print(messages)
+            # print(messages)
         else:
             messages = system_messages + scored_memory_lines + memory_lines + [{"role": "user", "content": f"{self.user_profile_store.get_name(user_id)}の発言" + user_text}]
         
@@ -193,6 +194,8 @@ class LLMEngine:
                 answer_text = answer_text.replace(s, "")
             for s in ["ましろ:", "ましろ：", "[ツール実行結果]"]:
                 answer_text = answer_text.removeprefix(s)
+            pattern = r"^\[.*?]\s"
+            answer_text = re.sub(pattern, "", answer_text)
             answer_text = answer_text.strip()
             # adjust_importanceのためにtimestampを保持
             self.last_assistant_timestamp = memory_store.add_memory(
@@ -201,6 +204,108 @@ class LLMEngine:
                 user_name="ましろ",
                 role="assistant_message"
             )
+        return answer_text
+    
+    def generate_autonomous(self, impulse_text: str, tool_context: None, user_name: str = 'User'):
+        """自己発話を生成する"""
+        internal_signal = f"""
+[内部シグナル] 
+以下はあなたの潜在意識/身体からの衝動であり、ユーザーからの直接のメッセージではありません。
+条件: {impulse_text} 
+指示: この衝動に自然に反応してください。新しいトピックを始めたり、独り言を言ったり、ユーザーに質問したりしても構いません。
+"""
+        reflections = memory_store.get_reflection(limit=3)
+        if reflections:
+            reflection_text = "\n".join([f"- {r['text']}" for r in reflections])
+            print("===reflection===")
+            print(reflection_text)
+            system_content = self.system_prompt + f"\n\n## Memory\n{reflection_text}"
+        else:
+            system_content = self.system_prompt
+        
+        system_messages = [{"role": "system", "content": system_content}]
+
+        memory_lines = []
+        short_memory = memory_store.get_short_term()
+        if short_memory:
+            for sm in short_memory:
+                if sm["role"] == "user_message":
+                    memory_lines.append({"role": "user", "content": f"{sm['user_name']}: {sm['text']}"})
+                elif sm["role"] == "assistant_message":
+                    memory_lines.append({"role": "assistant", "content": f"{sm['text']}"})
+        
+        reversed_memory_lines = memory_lines[-3:]
+        query_line = ''
+        for item in reversed_memory_lines:
+            query_line += str(item['content'])
+        scored_memory = memory_store.search_with_score(query=query_line, limit=2)
+        scored_memory_lines = []
+        if scored_memory:
+            for sm in scored_memory:
+                if sm["role"] == "user_message":
+                    scored_memory_lines.append({"role": "user", "content": f"{sm['user_name']}: {sm['text']}"})
+                elif sm["role"] == "assistant_message":
+                    scored_memory_lines.append({"role": "assistant", "content": f"{sm['text']}"})
+        print("===scored memory===")
+        print(scored_memory_lines)
+        print("===memory===")
+        print(memory_lines)
+        if tool_context is not None:
+            messages = system_messages + scored_memory_lines + memory_lines + [{"role": "assistant", "content": tool_context["mashiro_function_calling"]}] + [{"role": "ipython", "content": tool_context["tool_result"]}] + [{"role": "user", "content": internal_signal}]
+            # print(messages)
+        else:
+            messages = system_messages + scored_memory_lines + memory_lines + [{"role": "user", "content": internal_signal}]
+            # print(messages)
+
+        response = cast(dict[str, Any], self.llm_model.create_chat_completion(
+            messages=cast(List[Any], messages),
+            max_tokens=1024,
+            temperature=1.0,
+            #top_k=64,
+            #top_p=0.95,
+            repeat_penalty=1.1,
+            frequency_penalty=0.3,
+            presence_penalty=0.2,
+            stream=False,
+            stop=[
+                # Gemma
+                "<end_of_turn>",
+                "<start_of_turn>",
+                # ChatML (Qwen等)
+                "<|im_end|>",
+                "<|endoftext|>",
+                # Llama
+                "</s>",
+                "[INST]",
+                "[/INST]",
+                "<s>",
+                # 共通
+                "\nUser:",
+                "[コンテキスト]",
+                "[/CONTEXT]",
+            ]
+        ))
+
+        answer_text: str = response['choices'][0]['message']['content'] or ""
+
+        # print(f"[Debug] ましろ生: {answer_text}")
+        # 特殊トークンの除去
+        if '<function=' not in answer_text:
+            for s in ["<|im_end|>", "<|endoftext|>", "<think>", "</think>", "<end_of_turn>", "<start_of_turn>"]:
+                answer_text = answer_text.replace(s, "")
+            for s in ["ましろ:", "ましろ：", "[ツール実行結果]"]:
+                answer_text = answer_text.removeprefix(s)
+            pattern = r"^\[.*?]\s"
+            answer_text = re.sub(pattern, "", answer_text)
+            answer_text = answer_text.strip()
+            # adjust_importanceのためにtimestampを保持
+            if not answer_text.startswith("..."):
+                self.last_assistant_timestamp = memory_store.add_memory(
+                    text=answer_text,
+                    user_id=MASHIRO_ID,
+                    user_name="ましろ",
+                    role="assistant_message"
+                )
         return answer_text
 
     def _build_prompt_without_examples(self, config):

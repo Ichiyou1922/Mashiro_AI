@@ -5,7 +5,7 @@ from typing import Literal, Optional
 # 型定義
 
 # クライアント -> サーバーのメッセージタイプ
-ClientMessageType = Literal["audio_end", "interrupt", "cancel", "text_message"]
+ClientMessageType = Literal["audio_end", "interrupt", "cancel", "text_message", "autonomous"]
 
 # サーバー -> クライアントのメッセージタイプ
 ServerMessageType = Literal["state", "subtitle", "llm_token", "done", "error", "text_response", "emotion"]
@@ -81,6 +81,15 @@ def create_text_response_message(text):
     """LLMのレスポンスを作成"""
     return json.dumps({
         "type": "text_response",
+        "payload": {
+            "text": text
+        }
+    })
+
+def create_autonomous_message(text):
+    """自己発話レスポンスを作成"""
+    return json.dumps({
+        "type": "autonomous",
         "payload": {
             "text": text
         }

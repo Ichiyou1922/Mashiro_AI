@@ -60,6 +60,7 @@ NSFWな回答について修正は不要です（元モデルがabliteratedな�
 1. 重要なパターンや洞察を3~5つ抽出
 2. 矛盾している記憶があれば指摘
 3. 低品質な回答（オウム返し、文脈破綻）があれば修正案を提示
+4. rewritesについては、本当に無意味な回答（プレフィックスだけなど）に絞り慎重に扱ってください。直す必要がなければ書かないでください。
 
 記憶:
 {chr(10).join(memory_lines)}
@@ -105,11 +106,13 @@ JSON形式で回答:
         for item in reflection_data["contradictions"]:
             parent_ids.append(id_to_timestamp[item["id"]])
         
+        """
         for item in reflection_data["rewrites"]:
             if id_to_timestamp[item["id"]] in parent_ids:
                 continue
             parent_ids.append(id_to_timestamp[item["id"]])
             memory_store.rewrite_memory(id_to_timestamp[item["id"]], item["corrected"])
+        """
 
         for reflection_text in reflection_data["reflections"]:
             update = {

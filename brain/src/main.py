@@ -32,6 +32,8 @@ profile = UserProfileStore()
 
 text_response_queue = asyncio.Queue()
 
+last_channel_id = None
+
 
 # def remove_thoughts(text: str) -> str:
 #     pattern = r"\（思考:.*?\）"
@@ -252,7 +254,7 @@ async def player_task(audio_queue, vc, loop):
             audio_data = await audio_queue.get()
             if audio_data is None:
                 break
-            audio_source = discord.FFmpegPCMAudio(io.BytesIO(audio_data), pipe=True)
+            audio_source = discord.FFmpegPCMAudio(io.BytesIO(audio_data), pipe=True, before_options="-loglevel error")
             vc.play(audio_source, after=after_callback)
             await done_event.wait()
             # print("再生終了")
@@ -287,14 +289,17 @@ async def text_ws_receiver(ws):
 @bot.event
 async def on_ready():
     global text_ws
-    text_ws = await websockets.connect("ws://localhost:8000/ws")
+    text_ws = await websockets.connect("ws://localhost:8000/ws/text")
     asyncio.create_task(text_ws_receiver(text_ws))
     print('Logged in as Mashiro')
 
 @bot.event
 async def on_message(message: discord.Message):
+    global last_channel_id
     if message.author.bot:
         return
+
+    last_channel_id = message.channel.id
 
     if message.content.startswith("!"):
         await bot.process_commands(message)
@@ -304,9 +309,6 @@ async def on_message(message: discord.Message):
         image_url = message.attachments[0].url
     else:
         image_url = None
-
-    # print(f"User: {message.content}")
-    # print(f"user_id: {message.author.id}")
 
     async with message.channel.typing():
         await text_ws.send(create_text_message(
@@ -335,7 +337,7 @@ async def join(ctx):
     global reconnect_enabled
     reconnect_enabled = True
     play_queue = asyncio.Queue()
-    uri = "ws://localhost:8000/ws"
+    uri = "ws://localhost:8000/ws/voice"
     ws = await websockets.connect(uri)
     channel = ctx.author.voice.channel
     loop = asyncio.get_event_loop()

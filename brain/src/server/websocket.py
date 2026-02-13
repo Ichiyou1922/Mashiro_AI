@@ -3,7 +3,7 @@ import sys
 # パス解決のおまじない
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI, WebSocket
-from .protocol import create_state_message,create_subtitle_message, parse_client_message, create_error_message, create_done_message, create_text_response_message, create_emotion_message
+from .protocol import create_state_message,create_subtitle_message, parse_client_message, create_error_message, create_done_message, create_text_response_message, create_emotion_message, create_autonomous_message
 import websockets
 import asyncio
 from core.llm_engine import LLMEngine
@@ -17,6 +17,7 @@ from utils.tool_parser import parse_tool
 from utils.tools import execute, vision_tool
 from memory.reflection import ReflectionManager
 import re
+import time
 
 
 app = FastAPI()
@@ -34,8 +35,14 @@ reflection = ReflectionManager()
 
 importance_counter = 0
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+last_interaction_time = 0.0
+
+ignore_counter = 0
+
+ai_state = "idle"
+
+@app.websocket("/ws/voice")
+async def voice_endpoint(websocket: WebSocket):
     await websocket.accept()
     audio_queue = asyncio.Queue()
     text_queue = asyncio.Queue()
@@ -44,24 +51,34 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             # 並列実行
             await asyncio.gather(
-                receiver(websocket, audio_queue),
+                audio_receiver(websocket, audio_queue),
                 processor(audio_queue, websocket, text_queue),
                 message_send(text_queue, websocket),
+                autonomy_loop(websocket, text_queue),
+                return_exceptions=True
+            )
+
+    except Exception as e:
+        print(f"audio_endpoint disconnected: {e}")
+        await websocket.close()
+
+@app.websocket("/ws/text")
+async def text_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            await asyncio.gather(
+                text_receiver(websocket),
                 reflection_timer(websocket),
                 return_exceptions=True
             )
 
     except Exception as e:
-        print(f"WebSocket disconnected: {e}")
+        print(f"text_endpoint disconnected: {e}")
         await websocket.close()
 
 async def reflection_timer(websocket: WebSocket):
-    loop = asyncio.get_event_loop()
-    if reflection.check_and_trigger(memory_store.get_importance_sum(since=reflection.last_reflection_at)):
-        await websocket.send_text(create_state_message("sleeping"))
-        await loop.run_in_executor(None, reflection.perform_reflection)
-        await websocket.send_text(create_state_message("idle"))
-    
+    loop = asyncio.get_event_loop()    
     while True:
         await asyncio.sleep(1800)
         importance_sum = memory_store.get_importance_sum(since=reflection.last_reflection_at)
@@ -71,14 +88,135 @@ async def reflection_timer(websocket: WebSocket):
         await loop.run_in_executor(None, reflection.perform_reflection)
         await websocket.send_text(create_state_message("idle"))
 
+async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
+    """
+    中枢神経ループ 今の所沈黙を検知して発火
+    今後追加予定
+    - social
+    - bored
+    - ???
+    """
+    global last_interaction_time
+    last_interaction_time = time.time()
+
+    global ignore_counter
+    global ai_state
+
+    boredom_threshold = 30.0
+    check_interval = 1.0
+
+    print("Autonomy Loop Started.")
+
+    while True:
+        if ai_state == "idle":
+            await asyncio.sleep(check_interval)
+
+            current_time = time.time()
+            silence_dulation = current_time - last_interaction_time
+
+            if silence_dulation > boredom_threshold:
+                ignore_counter += 1
+                print(f"Autonomy Triggered: Silence for {silence_dulation:.1f}s")
+
+                last_interaction_time = time.time()
+
+                await websocket.send_text(create_state_message("thinking"))
+                ai_state = "thinking"
+
+                loop = asyncio.get_event_loop()
+                implus = f"ユーザーからの返事がありません。{ignore_counter}回目です。今までの会話から何を話すべきか、それとも話さないべきなのかを考えてください。話すべきなら返答を、話さないなら「...」を出力してください。"
+
+                response = await loop.run_in_executor(None, llm.generate_autonomous, implus, None)
+
+                clean_text, emotion = parse_emotion(response)
+
+                if clean_text.startswith("..."):
+                    print("ましろは喋らない選択をしました。")
+                    await websocket.send_text(create_state_message("idle"))
+                    ai_state = "idle"
+                    continue
+
+                await text_queue.put({"type": "state", "state": "speaking"})
+                ai_state = "speaking"
+                await text_queue.put({"type": "emotion", "data": emotion})
+                print(f"ましろemotion: {emotion}")
+                print(f"ましろtext: {clean_text}")
+                print("Discordに流したよ")
+
+                parsed_result = re.split('([、。？！…]|\.{3}|\.{6})', clean_text)
+                for text in parsed_result:
+                    if text.strip():
+                        await text_queue.put({"type": "text", "data": text})
+
+                await text_queue.put({"type": "done"})
+                continue
+        else:
+            # print("自己発話プロセスをスキップしました。")
+            await asyncio.sleep(check_interval / 10.0)
+            last_interaction_time = time.time()
+
+async def text_receiver(websocket: WebSocket):
+    """クライアントからメッセージを受信して生成テキストを送り返す"""
+    global importance_counter
+    loop = asyncio.get_event_loop()
+    try:
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.receive" and "text" in message:
+                msg = parse_client_message(message["text"])
+                if msg["type"] == "text_message":
+                    user_id = msg["payload"]["user_id"]
+                    text = msg["payload"]["text"]
+                    image_url = msg["payload"].get("image_url")
+                    print("textを受信したよ")
+
+                    if image_url:
+                        vision_text = await loop.run_in_executor(None, vision_tool.analyze_image, image_url)
+                        text = f"{text} [画像の説明]: {vision_text}"
+
+                    print(f"{user_profile.get_name(user_id)}: {text}")
+
+                    response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
+                    result = parse_tool(response)
+
+                    importance_counter += 1
+                    if importance_counter >= 20:
+                        asyncio.ensure_future(loop.run_in_executor(None, memory_store.evaluate_importance))
+                        importance_counter = 0
+
+                    print(result)
+                    if type(result) is dict:
+                        if result["tool_name"] in ["time_tool", "date_tool"]:
+                            tool_result = execute(result["tool_name"])
+                            print(tool_result)
+                            include_tool_text = {
+                                "mashiro_function_calling": response,
+                                "tool_result": tool_result
+                            }
+                            response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
+                        
+                    print("メッセージを生成したよ")
+                    clean_text, emotion = parse_emotion(response)
+                    print(f"ましろemotion: {emotion}")
+                    print(f"ましろtext: {clean_text}")
+                    await websocket.send_text(create_emotion_message(emotion))
+                    await websocket.send_text(create_text_response_message(clean_text))
+                    print("Discordに流したよ")
+    except Exception as e:
+        print(f"text_receiver error: {e}")
+                
+
 # 受信タスク
-async def receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
+async def audio_receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
     """
     クライアントからのメッセージを受信してキューに振り分ける
     - バイナリ -> 音声データ -> audio_queue
     - テキスト -> JSON制御メッセージ -> 処理分岐
     """
     global importance_counter
+    global last_interaction_time
+    global ignore_counter
+
     try:
         while True:
             # WebSocketから受信(バイナリ/テキスト)
@@ -87,6 +225,8 @@ async def receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
 
             if message["type"] == "websocket.receive":
                 if "bytes" in message:
+                    ignore_counter = 0
+                    last_interaction_time = time.time()
                     # 送信側はstruct.pack(">q", user_id) + audio_bytesとして送る
                     raw_bytes = message["bytes"]
                     user_id = struct.unpack(">q", raw_bytes[:8])[0] # 先頭8バイトを取得
@@ -99,45 +239,6 @@ async def receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
                     if msg["type"] == "audio_end":
                         # processorに終了通知
                         await audio_queue.put((None, None))
-
-                    elif msg["type"] == "text_message":
-                        user_id = msg["payload"]["user_id"]
-                        text = msg["payload"]["text"]
-                        image_url = msg["payload"].get("image_url") # getを使うとキーがない場合にNoneを返してくれる
-                        print("テキストを受信したよ")
-
-                        if image_url:
-                            vision_text = await loop.run_in_executor(None, vision_tool.analyze_image, image_url)
-                            text = f"{text} [画像の説明]: {vision_text}"
-
-                        print(f"{user_profile.get_name(user_id)}: {text}")
-
-                        response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
-                        result = parse_tool(response)
-
-                        importance_counter += 1
-                        if importance_counter >= 20:
-                            asyncio.ensure_future(loop.run_in_executor(None, memory_store.evaluate_importance))
-                            importance_counter = 0
-
-                        print(result)
-                        if type(result) is dict:
-                            if result["tool_name"] in ["time_tool", "date_tool"]:
-                                tool_result = execute(result["tool_name"])
-                                print(tool_result)
-                                include_tool_text = {
-                                    "mashiro_function_calling": response,
-                                    "tool_result": tool_result
-                                }
-                                response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
-                        
-                        print("メッセージを生成したよ")
-                        clean_text, emotion = parse_emotion(response)
-                        print(f"ましろemotion: {emotion}")
-                        print(f"ましろtext: {clean_text}")
-                        await websocket.send_text(create_emotion_message(emotion))
-                        await websocket.send_text(create_text_response_message(clean_text))
-                        print("Discordに流したよ")
 
                     elif msg["type"] == "interrupt":
                         # TODO: 割り込み処理
@@ -163,6 +264,7 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
     """
     loop = asyncio.get_event_loop()
     global importance_counter
+    global ai_state
 
     try:
         while True:
@@ -172,6 +274,7 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                 continue
             else:
                 await websocket.send_text(create_state_message("thinking"))
+                ai_state = "thinking"
                 # audio_data_silero = await loop.run_in_executor(None, vad.convert_for_whisper, audio_data)
                 # text = await loop.run_in_executor(None, stt.transcribe, audio_data_silero)
                 text = await loop.run_in_executor(None, stt.groq_transcribe, audio_data)
@@ -179,6 +282,7 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                 if text is None or text.strip() == "":
                     # ハルシネーションか無音 -> スキップする
                     await websocket.send_text(create_state_message("idle"))
+                    ai_state = "idle"
                     continue 
 
                 print(f"{user_id}: {text}")
@@ -216,6 +320,7 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                 parsed_result = []
                 parsed_result = re.split('([、。？！…]|\.{3}|\.{6})', clean_text)
                 await text_queue.put({"type": "state", "state": "speaking"})
+                ai_state = "speaking"
                 await text_queue.put({"type": "emotion", "data": emotion})
                 for text in parsed_result:
                     if text.strip():
@@ -259,6 +364,7 @@ async def message_send(text_queue: asyncio.Queue, websocket: WebSocket):
             
             elif data["type"] == "done":
                 await websocket.send_text(create_done_message())
+                ai_state = "idle"
                 continue
         
         except Exception as e:
