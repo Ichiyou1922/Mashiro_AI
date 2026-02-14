@@ -41,6 +41,8 @@ ignore_counter = 0
 
 ai_state = "idle"
 
+godot_queue: asyncio.Queue | None = None
+
 @app.websocket("/ws/voice")
 async def voice_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -77,6 +79,37 @@ async def text_endpoint(websocket: WebSocket):
         print(f"text_endpoint disconnected: {e}")
         await websocket.close()
 
+@app.websocket("/ws/godot")
+async def godot_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    global godot_queue
+    try:
+        godot_queue = asyncio.Queue()
+        while True:
+            data = await godot_queue.get()
+            if data is None:
+                await asyncio.sleep(0.1)
+                continue
+            elif data["type"] == "state":
+                await websocket.send_text(create_state_message(data["state"]))
+                continue
+            elif data["type"] == "text":
+                await websocket.send_text(create_text_response_message(data["data"]))
+                continue
+            elif data["type"] == "emotion":
+                emotion = data["data"]
+                if emotion is None:
+                    await websocket.send_text(create_emotion_message("neutral"))
+                    continue
+                else:
+                    await websocket.send_text(create_emotion_message(emotion))
+                    continue
+
+    except Exception as e:
+        print(f"godot_endpoint disconnected: {e}")
+        godot_queue = None
+
+
 async def reflection_timer(websocket: WebSocket):
     loop = asyncio.get_event_loop()    
     while True:
@@ -101,6 +134,7 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
 
     global ignore_counter
     global ai_state
+    global godot_queue
 
     boredom_threshold = 30.0
     check_interval = 1.0
@@ -122,6 +156,8 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
 
                 await websocket.send_text(create_state_message("thinking"))
                 ai_state = "thinking"
+                if godot_queue is not None:
+                    await godot_queue.put({"type": "state", "state": "thinking"})
 
                 loop = asyncio.get_event_loop()
                 implus = f"ユーザーからの返事がありません。{ignore_counter}回目です。今までの会話から何を話すべきか、それとも話さないべきなのかを考えてください。話すべきなら返答を、話さないなら「...」を出力してください。"
@@ -134,11 +170,19 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
                     print("ましろは喋らない選択をしました。")
                     await websocket.send_text(create_state_message("idle"))
                     ai_state = "idle"
+                    if godot_queue is not None:
+                        await godot_queue.put({"type": "state", "state": "idle"})
                     continue
 
                 await text_queue.put({"type": "state", "state": "speaking"})
                 ai_state = "speaking"
+                if godot_queue is not None:
+                    await godot_queue.put({"type": "state", "state": "speaking"})
+                
+                # もはやtext_queueにemotionは必要無いかも
                 await text_queue.put({"type": "emotion", "data": emotion})
+                if godot_queue is not None:
+                    await godot_queue.put({"type": "emotion", "data": emotion})
                 print(f"ましろemotion: {emotion}")
                 print(f"ましろtext: {clean_text}")
                 print("Discordに流したよ")
@@ -147,6 +191,8 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
                 for text in parsed_result:
                     if text.strip():
                         await text_queue.put({"type": "text", "data": text})
+                        if godot_queue is not None:
+                            await godot_queue.put({"type": "text", "data": text})
 
                 await text_queue.put({"type": "done"})
                 continue
@@ -221,7 +267,6 @@ async def audio_receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
         while True:
             # WebSocketから受信(バイナリ/テキスト)
             message = await websocket.receive()
-            loop = asyncio.get_event_loop()
 
             if message["type"] == "websocket.receive":
                 if "bytes" in message:
@@ -265,6 +310,7 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
     loop = asyncio.get_event_loop()
     global importance_counter
     global ai_state
+    global godot_queue
 
     try:
         while True:
@@ -275,6 +321,8 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
             else:
                 await websocket.send_text(create_state_message("thinking"))
                 ai_state = "thinking"
+                if godot_queue is not None:
+                    await godot_queue.put({"type": "state", "state": "thinking"})
                 # audio_data_silero = await loop.run_in_executor(None, vad.convert_for_whisper, audio_data)
                 # text = await loop.run_in_executor(None, stt.transcribe, audio_data_silero)
                 text = await loop.run_in_executor(None, stt.groq_transcribe, audio_data)
@@ -283,6 +331,8 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                     # ハルシネーションか無音 -> スキップする
                     await websocket.send_text(create_state_message("idle"))
                     ai_state = "idle"
+                    if godot_queue is not None:
+                        await godot_queue.put({"type": "state", "state": "idle"})
                     continue 
 
                 print(f"{user_id}: {text}")
@@ -312,19 +362,46 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                         response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
                         
                 print("メッセージを生成したよ")
-                clean_text, emotion = parse_emotion(response)
-                print("===ましろ応答===")
-                print(f"ましろemotion: {emotion}")
-                print(f"ましろtext: {clean_text}")
                 
+                # 全文からの一括感情解析はやめる
+                # clean_text, emotion = parse_emotion(response)
+
                 parsed_result = []
-                parsed_result = re.split('([、。？！…]|\.{3}|\.{6})', clean_text)
+                # response(タグ込み)を句読点で分割する
+                parsed_result = re.split('([、。？！…]|\.{3}|\.{6})', response)
+                
+                # Speaking状態を開始
                 await text_queue.put({"type": "state", "state": "speaking"})
                 ai_state = "speaking"
-                await text_queue.put({"type": "emotion", "data": emotion})
-                for text in parsed_result:
-                    if text.strip():
-                        await text_queue.put({"type": "text", "data": text})
+                if godot_queue is not None:
+                     await godot_queue.put({"type": "state", "state": "speaking"})
+
+                # 最終的な感情を保持する変数
+                final_emotion = "neutral"
+
+                # 分割ループ
+                current_chunk = ""
+                for segment in parsed_result:
+                    if not segment: continue
+                    
+                    # 感情解析
+                    chunk_text, chunk_emotion = parse_emotion(segment)
+                    
+                    # 感情が見つかれば更新（送信はしない）
+                    if chunk_emotion != "neutral":
+                        final_emotion = chunk_emotion
+                    
+                    if chunk_text.strip():
+                        await text_queue.put({"type": "text", "data": chunk_text})
+
+                # 発話の後に一回だけ感情を送る
+                if final_emotion != "neutral":
+                    await text_queue.put({"type": "emotion", "data": final_emotion})
+                    if godot_queue is not None:
+                        await godot_queue.put({"type": "emotion", "data": final_emotion})
+
+                await text_queue.put({"type": "done"})
+                continue
                 await text_queue.put({"type": "done"})
                 continue
 
@@ -333,6 +410,8 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
         await text_queue.put(None)
 
 async def message_send(text_queue: asyncio.Queue, websocket: WebSocket):
+    global ai_state
+    global godot_queue
     while True:
         data = await text_queue.get()
         try:
@@ -354,7 +433,6 @@ async def message_send(text_queue: asyncio.Queue, websocket: WebSocket):
             
             elif data["type"] == "emotion":
                 emotion = data["data"]
-                print(f"emotion: {emotion}")
                 if emotion is None:
                     await websocket.send_text(create_emotion_message("neutral"))
                     continue 
@@ -365,6 +443,8 @@ async def message_send(text_queue: asyncio.Queue, websocket: WebSocket):
             elif data["type"] == "done":
                 await websocket.send_text(create_done_message())
                 ai_state = "idle"
+                if godot_queue is not None:
+                    await godot_queue.put({"type": "state", "state": "idle"})
                 continue
         
         except Exception as e:

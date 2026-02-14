@@ -3,15 +3,15 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://imo2el1lre2q"
-path="res://.godot/imported/texture_00.png-4ff4247ef420fb80122da107bed5e8d0.ctex"
+path="res://.godot/imported/texture_00.png-bcfdb41765bf212f42a52a6584c906ce.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/models/hiyori_pro_jp/runtime/hiyori_pro_t11.2048/texture_00.png"
-dest_files=["res://.godot/imported/texture_00.png-4ff4247ef420fb80122da107bed5e8d0.ctex"]
+source_file="res://assets/live2d/hiyori_pro_jp/runtime/hiyori_pro_t11.2048/texture_00.png"
+dest_files=["res://.godot/imported/texture_00.png-bcfdb41765bf212f42a52a6584c906ce.ctex"]
 
 [params]
 

@@ -1,8 +1,116 @@
 [gd_scene load_steps=2 format=3 uid="uid://db003wdrr5doh"]
 
-[ext_resource type="Script" uid="uid://cu4osfdyux83h" path="res://scenes/NetworkManager.cs" id="1_elqb8"]
+[ext_resource type="Script" uid="uid://cft0p1vmvwqsp" path="res://scripts/NetworkManager.gd" id="1_elqb8"]
 
 [node name="Main" type="Node2D"]
 
 [node name="NetworkManager" type="Node" parent="."]
 script = ExtResource("1_elqb8")
+
+[node name="GDCubismUserModel" type="GDCubismUserModel" parent="."]
+assets = "res://assets/live2d/hiyori_pro_jp/runtime/hiyori_pro_t11.model3.json"
+anim_loop = false
+anim_loop_fade_in = true
+anim_expression = ""
+anim_motion = ""
+ParamAngleX = 1.2460005
+ParamAngleY = 3.9658933
+ParamAngleZ = -4.986879
+ParamCheek = 0.0
+ParamEyeLOpen = 1.0
+ParamEyeLSmile = 0.0
+ParamEyeROpen = 1.0
+ParamEyeRSmile = 0.0
+ParamEyeBallX = 0.0
+ParamEyeBallY = 0.0
+ParamBrowLY = 0.0
+ParamBrowRY = 0.0
+ParamBrowLX = 0.0
+ParamBrowRX = 0.0
+ParamBrowLAngle = 0.0
+ParamBrowRAngle = 0.0
+ParamBrowLForm = 0.0
+ParamBrowRForm = 0.0
+ParamMouthForm = 1.0
+ParamMouthOpenY = 0.0
+ParamBodyAngleX = 1.990304
+ParamBodyAngleY = 0.0
+ParamBodyAngleZ = 0.0
+ParamBreath = 0.30944997
+ParamShoulder = 0.0
+ParamLeg = 1.0
+ParamArmLA = 0.0
+ParamArmRA = 0.0
+ParamArmLB = 0.0
+ParamArmRB = 0.0
+ParamHandLB = 10.0
+ParamHandRB = 10.0
+ParamHandL = 0.0
+ParamHandR = 0.0
+ParamBustY = 0.0
+ParamHairAhoge = 0.0
+ParamHairFront = -0.029999623
+ParamHairBack = -0.110813215
+ParamSideupRibbon = -0.025392216
+ParamRibbon = 0.00028997302
+ParamSkirt = 0.0002965915
+ParamSkirt2 = 0.0
+Param_Angle_Rotation_1_ArtMesh62 = -0.23716927
+Param_Angle_Rotation_2_ArtMesh62 = -0.08038759
+Param_Angle_Rotation_3_ArtMesh62 = -0.17725468
+Param_Angle_Rotation_4_ArtMesh62 = -0.100057125
+Param_Angle_Rotation_5_ArtMesh62 = -0.0010371208
+Param_Angle_Rotation_6_ArtMesh62 = 0.044714212
+Param_Angle_Rotation_7_ArtMesh62 = 0.06296396
+Param_Angle_Rotation_1_ArtMesh61 = -0.23716927
+Param_Angle_Rotation_2_ArtMesh61 = -0.08038759
+Param_Angle_Rotation_3_ArtMesh61 = -0.17725468
+Param_Angle_Rotation_4_ArtMesh61 = -0.100057125
+Param_Angle_Rotation_5_ArtMesh61 = -0.0010371208
+Param_Angle_Rotation_6_ArtMesh61 = 0.044714212
+Param_Angle_Rotation_7_ArtMesh61 = 0.06296396
+Param_Angle_Rotation_1_ArtMesh55 = -0.1122576
+Param_Angle_Rotation_2_ArtMesh55 = -0.03598869
+Param_Angle_Rotation_3_ArtMesh55 = -0.010536909
+Param_Angle_Rotation_4_ArtMesh55 = -0.016157627
+Param_Angle_Rotation_5_ArtMesh55 = -0.014100075
+Param_Angle_Rotation_6_ArtMesh55 = 0.0111579895
+Param_Angle_Rotation_7_ArtMesh55 = 0.08415699
+Param_Angle_Rotation_1_ArtMesh54 = -0.1122576
+Param_Angle_Rotation_2_ArtMesh54 = -0.03598869
+Param_Angle_Rotation_3_ArtMesh54 = -0.010536909
+Param_Angle_Rotation_4_ArtMesh54 = -0.016157627
+Param_Angle_Rotation_5_ArtMesh54 = -0.014100075
+Param_Angle_Rotation_6_ArtMesh54 = 0.0111579895
+Param_Angle_Rotation_7_ArtMesh54 = 0.08415699
+PartCore = 1.0
+PartCheek = 1.0
+PartBrow = 1.0
+PartEye = 1.0
+PartNose = 1.0
+PartMouth = 1.0
+PartFace = 1.0
+PartEar = 1.0
+PartHairSide = 1.0
+PartHairFront = 1.0
+PartHairBack = 1.0
+PartNeck = 1.0
+PartArmA = 1.0
+PartArmB = 0.0
+PartBody = 1.0
+PartEyeBall = 1.0
+ArtMesh55_Skinning = 1.0
+Part4 = 1.0
+ArtMesh54_Skinning = 1.0
+Part3 = 1.0
+ArtMesh61_Skinning = 1.0
+Part = 1.0
+ArtMesh62_Skinning = 1.0
+Part2 = 1.0
+light_mask = 0
+position = Vector2(1507.8318, 2268.2463)
+scale = Vector2(0.555, 0.555)
+
+[node name="GDCubismEffectBreath" type="GDCubismEffectBreath" parent="GDCubismUserModel"]
+
+[node name="GDCubismEffectEyeBlink" type="GDCubismEffectEyeBlink" parent="GDCubismUserModel"]

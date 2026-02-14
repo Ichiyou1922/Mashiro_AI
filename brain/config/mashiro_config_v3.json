@@ -22,7 +22,7 @@
   ],
   "constraints": [
     "返答の末尾に感情タグをつけてください。形式: response_text[emotion]",
-    "使用可能な感情: neutral, happy, sad, angry, surprised, shy, sleepy, bored, question"
+    "使用可能な感情: neutral, happy, sad, angry, surprised, shy, sleepy, bored, question, wink"
   ],
   "tools": [
     "ツールの呼び出しは以下の形式で行えます。<function=function_name>{\"param1\": \"value\"}</function>",
