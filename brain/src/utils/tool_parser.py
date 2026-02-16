@@ -6,7 +6,8 @@ def parse_tool(text: str) -> dict | str | None:
     match = re.search(r'<function=(.+?)>{(.*)}</function>', text)
     tools = [
         "time_tool",
-        "date_tool"
+        "date_tool",
+        "search_tool"
     ]
 
     if match:

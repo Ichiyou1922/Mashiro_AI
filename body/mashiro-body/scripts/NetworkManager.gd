@@ -10,15 +10,10 @@ var time_accum = 0.0
 var current_ai_state = "idle"
 var last_message_time = 0
 const MOUTH_TIMEOUT_MS = 3000 # 3000ms
-const SPEAK_START_DELAY_MS = 1000 # 音声再生遅延に合わせるための待機時間
+# const SPEAK_START_DELAY_MS = 1000 # 音声再生遅延に合わせるための待機時間
 const EMOTION_RESET_DURATION_MS = 5000 # 感情表示時間（ミリ秒）
 var speak_start_time = 0
 var emotion_reset_timer = 0
-
-# 現状の口パクの方式には不満があるため修正を検討
-# 今後の修正方針
-# 1. Discordから音声のボリュームを取得する？
-# 2. ボリュームに合わせて口の開き具合を変える
 
 func _ready():
 	var err = ws.connect_to_url(_url)
@@ -37,6 +32,10 @@ func _ready():
 		model.position = Vector2(viewport_rect.size.x * 0.5 + 100, viewport_rect.size.y * 0.8 + 400)
 		model.scale = Vector2(0.4, 0.4)
 		print("Model position adjusted to: ", model.position)
+
+		# get_viewport().transparent_bg = false
+		DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_BORDERLESS, true)
+		# RenderingServer.set_default_clear_color(Color(0, 1, 0, 1))
 		
 		# 表情コントローラーを追加
 		_setup_expression_controller()
@@ -53,14 +52,14 @@ func _setup_expression_controller():
 	model.add_child(expression_controller)
 	print("ExpressionController added to model")
 
-func _process(delta):
+func _process(_delta):
 	ws.poll()
 	var state = ws.get_ready_state()
 	
 	if state == WebSocketPeer.STATE_OPEN:
 		while ws.get_available_packet_count() > 0:
 			var message = ws.get_packet().get_string_from_utf8()
-			print("Received: ", message)
+			# print("Received: ", message)
 			var doc = JSON.parse_string(message)
 			var type = doc["type"]
 
@@ -71,23 +70,17 @@ func _process(delta):
 				pass
 			
 			elif type == "state":
-				var new_state = doc["payload"]["state"]
-				
-				# speaking開始時に時刻を記録
-				if new_state == "speaking" and current_ai_state != "speaking":
-					speak_start_time = Time.get_ticks_msec()
+				current_ai_state = doc["payload"]["state"]
+				pass
 
-				current_ai_state = new_state
-				
-				# 状態が変わった瞬間にモーションを再生したい場合はここで判定する
-				# 今回はIdleモーションなどでループ制御するなら毎フレームチェックでも良いが、
-				# start_motionはトリガーなので状態変化時のみにするのが安全
-				
-				if current_ai_state == "idle":
-					model.start_motion("Idle", 0, GDCubismUserModel.Priority.PRIORITY_IDLE)
-					# 以前はここで表情をリセットしていたが、
-					# 発話後の「最後の表情」を維持するためリセットしない
-					print("State idle: Keeping last emotion: ", current_emotion)
+			elif type == "volume":
+				var raw_volume = doc["payload"]["volume"]
+				# 正規化: RMS値(0 ~ 32768) -> 0.0 ~ 1.0
+				# 閾値は実際の音声を見て調整
+				var normalized = clamp(raw_volume / 3000.0, 0.0, 1.0)
+				# print(normalized)
+				if expression_controller:
+					expression_controller.set_mouth_open(normalized)
 
 			elif type == "emotion":
 				var emotion = doc["payload"]["emotion"]
@@ -117,29 +110,12 @@ func _process(delta):
 
 		elif current_ai_state == "sleep":
 			pass
-		
-		elif current_ai_state == "speaking":
-			var current_time = Time.get_ticks_msec()
-			
-			# 開始遅延: 話し始めから一定時間は口を動かさない (音声再生待ち)
-			if current_time - speak_start_time < SPEAK_START_DELAY_MS:
-				if expression_controller:
-					expression_controller.set_mouth_open(0.0)
-			
-			# タイムアウト判定: 最後のメッセージから一定時間経過していたら口を閉じる
-			elif current_time - last_message_time > MOUTH_TIMEOUT_MS:
-				if expression_controller:
-					expression_controller.set_mouth_open(0.0)
-			else:
-				time_accum += delta * 15.0 # 口パクの速さ
-				var mouth_open = (sin(time_accum) + 1.0) * 0.5
-				
-				if expression_controller:
-					expression_controller.set_mouth_open(mouth_open)
 
 		elif current_ai_state == "thinking":
 			if expression_controller:
 				expression_controller.set_mouth_open(0.0)
+		elif current_ai_state == "speaking":
+			pass
 		else:
 			if expression_controller:
 				expression_controller.set_mouth_open(0.0)

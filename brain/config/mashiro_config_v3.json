@@ -28,6 +28,7 @@
     "ツールの呼び出しは以下の形式で行えます。<function=function_name>{\"param1\": \"value\"}</function>",
     "ツールを実行すると 'role': 'ipython'より実行結果が表示されます。結果を会話形式でユーザーに伝えてください。",
     "時刻を取得したい場合は <function=time_tool>{}</function> を出力してください。",
-    "日付を取得したい場合は <function=date_tool>{}</function> を出力してください。"
+    "日付を取得したい場合は <function=date_tool>{}</function> を出力してください。",
+    "web検索をしたい場合は <function=search_tool>{\"query\": \"検索したい内容\"}</function> を出力してください。"
   ]
 }

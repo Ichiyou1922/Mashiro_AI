@@ -121,6 +121,8 @@ class LLMEngine:
                     memory_lines.append({"role": "user", "content": f"{sm['user_name']}: {sm['text']}"})
                 elif sm["role"] == "assistant_message":
                     memory_lines.append({"role": "assistant", "content": f"{sm['text']}"})
+                elif sm["role"] == "tool_result":
+                    memory_lines.append({"role": "ipython", "content": f"{sm['text']}"})
         
         reversed_memory_lines = memory_lines[-3:]
         query_line = ''
@@ -233,6 +235,8 @@ class LLMEngine:
                     memory_lines.append({"role": "user", "content": f"{sm['user_name']}: {sm['text']}"})
                 elif sm["role"] == "assistant_message":
                     memory_lines.append({"role": "assistant", "content": f"{sm['text']}"})
+                elif sm["role"] == "tool_result":
+                    memory_lines.append({"role": "ipython", "content": f"{sm['text']}"})
         
         reversed_memory_lines = memory_lines[-3:]
         query_line = ''
@@ -246,6 +250,7 @@ class LLMEngine:
                     scored_memory_lines.append({"role": "user", "content": f"{sm['user_name']}: {sm['text']}"})
                 elif sm["role"] == "assistant_message":
                     scored_memory_lines.append({"role": "assistant", "content": f"{sm['text']}"})
+                
         print("===scored memory===")
         print(scored_memory_lines)
         print("===memory===")

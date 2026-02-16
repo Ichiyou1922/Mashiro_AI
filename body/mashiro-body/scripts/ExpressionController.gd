@@ -35,21 +35,23 @@ func _ready():
 	cubism_epilogue.connect(_on_cubism_epilogue)
 
 func _on_cubism_init(model: GDCubismUserModel):
+	# print("cubism_init fired!")
 	_model = model
 	var params = model.get_parameters()
 	for p in params:
 		param_dict[p.id] = p
-	print("ExpressionController: Parameters initialized. Count: ", params.size())
+	# print("ExpressionController: Parameters initialized. Count: ", params.size())
 
 func _on_cubism_epilogue(_model: GDCubismUserModel, _delta: float):
 	# モーション再生などで上書きされた後に表情パラメータを適用する
+	# print("cubism_epilogue fired! mouth target: ", _target_params["ParamMouthOpenY"])
 	apply_expression_parameters()
 
 func set_emotion(emotion_name: String):
 	if current_emotion != emotion_name:
 		current_emotion = emotion_name
 		_update_targets(emotion_name)
-		print("ExpressionController: Emotion set to ", emotion_name)
+		# print("ExpressionController: Emotion set to ", emotion_name)
 
 func set_mouth_open(value: float):
 	_mouth_open_y = value

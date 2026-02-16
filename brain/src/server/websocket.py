@@ -3,7 +3,7 @@ import sys
 # パス解決のおまじない
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI, WebSocket
-from .protocol import create_state_message,create_subtitle_message, parse_client_message, create_error_message, create_done_message, create_text_response_message, create_emotion_message, create_autonomous_message
+from .protocol import create_state_message,create_subtitle_message, parse_client_message, create_error_message, create_done_message, create_text_response_message, create_emotion_message, create_autonomous_message, create_volume_message
 import websockets
 import asyncio
 from core.llm_engine import LLMEngine
@@ -96,6 +96,8 @@ async def godot_endpoint(websocket: WebSocket):
             elif data["type"] == "text":
                 await websocket.send_text(create_text_response_message(data["data"]))
                 continue
+            elif data["type"] == "volume":
+                await websocket.send_text(create_volume_message(data["volume"]))
             elif data["type"] == "emotion":
                 emotion = data["data"]
                 if emotion is None:
@@ -176,9 +178,7 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
 
                 await text_queue.put({"type": "state", "state": "speaking"})
                 ai_state = "speaking"
-                if godot_queue is not None:
-                    await godot_queue.put({"type": "state", "state": "speaking"})
-                
+
                 # もはやtext_queueにemotionは必要無いかも
                 await text_queue.put({"type": "emotion", "data": emotion})
                 if godot_queue is not None:
@@ -232,8 +232,9 @@ async def text_receiver(websocket: WebSocket):
 
                     print(result)
                     if type(result) is dict:
-                        if result["tool_name"] in ["time_tool", "date_tool"]:
-                            tool_result = execute(result["tool_name"])
+                        if result["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
+                            tool_result = execute(result["tool_name"], result["param"])
+                            memory_store.short_term.append({"text": tool_result, "role": "tool_result", "user_name": "system", "timestamp": time.time()})
                             print(tool_result)
                             include_tool_text = {
                                 "mashiro_function_calling": response,
@@ -352,8 +353,9 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
 
                 print(result)
                 if type(result) is dict:
-                    if result["tool_name"] in ["time_tool", "date_tool"]:
-                        tool_result = execute(result["tool_name"])
+                    if result["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
+                        tool_result = execute(result["tool_name"], result["param"])
+                        memory_store.short_term.append({"text": tool_result, "role": "tool_result", "user_name": "system", "timestamp": time.time()})
                         print(tool_result)
                         include_tool_text = {
                             "mashiro_function_calling": response,
@@ -373,8 +375,6 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                 # Speaking状態を開始
                 await text_queue.put({"type": "state", "state": "speaking"})
                 ai_state = "speaking"
-                if godot_queue is not None:
-                     await godot_queue.put({"type": "state", "state": "speaking"})
 
                 # 最終的な感情を保持する変数
                 final_emotion = "neutral"
@@ -399,9 +399,7 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                     await text_queue.put({"type": "emotion", "data": final_emotion})
                     if godot_queue is not None:
                         await godot_queue.put({"type": "emotion", "data": final_emotion})
-
-                await text_queue.put({"type": "done"})
-                continue
+                        
                 await text_queue.put({"type": "done"})
                 continue
 
@@ -443,8 +441,6 @@ async def message_send(text_queue: asyncio.Queue, websocket: WebSocket):
             elif data["type"] == "done":
                 await websocket.send_text(create_done_message())
                 ai_state = "idle"
-                if godot_queue is not None:
-                    await godot_queue.put({"type": "state", "state": "idle"})
                 continue
         
         except Exception as e:

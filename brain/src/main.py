@@ -17,6 +17,8 @@ import struct
 from server.protocol import parse_client_message, create_state_message, create_text_message
 import json
 import re
+import numpy as np
+
 
 logging.getLogger("discord").setLevel(logging.WARNING)
 logging.getLogger("discord.ext.voice_recv").setLevel(logging.WARNING)
@@ -44,6 +46,35 @@ def remove_thoughts(text: str) -> str:
     pattern = r"<think>.*?</think>"
     cleaned_text = re.sub(pattern, "", text, flags=re.DOTALL)
     return cleaned_text.strip()
+
+# ========== Custom AudioSource =========
+class VolumeMonitor(discord.AudioSource):
+    def __init__(self, original, godot_queue, loop):
+        self.original = original
+        self.godot_queue = godot_queue
+        self.loop = loop
+
+    def read(self) -> bytes:
+        data = self.original.read()
+        if not data:
+            return data
+        
+        # RMS
+        try:
+            if self.godot_queue is not None:
+                samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+                volume = np.sqrt(np.mean(np.square(samples)))
+                asyncio.run_coroutine_threadsafe(
+                    self.godot_queue.put({"type": "volume", "volume": float(volume)}),
+                    self.loop
+                )
+        except Exception as e:
+            print(f"VolumeMonitor error: {e}")
+        
+        return data
+    
+    def cleanup(self) -> None:
+        return self.original.cleanup()
 
 # ========== AudioSink ==========
 class MyAudioSink(voice_recv.AudioSink):
@@ -242,7 +273,7 @@ async def receiver_task(ws, play_queue: asyncio.Queue, sink: MyAudioSink):
 
 
 
-async def player_task(audio_queue, vc, loop):
+async def player_task(audio_queue, vc, loop, sink: MyAudioSink):
     done_event = asyncio.Event()
 
     def after_callback(_error):
@@ -254,9 +285,15 @@ async def player_task(audio_queue, vc, loop):
             audio_data = await audio_queue.get()
             if audio_data is None:
                 break
+            
             audio_source = discord.FFmpegPCMAudio(io.BytesIO(audio_data), pipe=True, before_options="-loglevel error")
-            vc.play(audio_source, after=after_callback)
+            audio_source_custom = VolumeMonitor(audio_source, fastapi.godot_queue, loop)
+            await fastapi.godot_queue.put({"type": "state", "state": "speaking"})
+            sink.ai_state = "speaking"
+            vc.play(audio_source_custom, after=after_callback)
             await done_event.wait()
+            await fastapi.godot_queue.put({"type": "state", "state": "idle"})
+            sink.ai_state = "idle"
             # print("再生終了")
         except Exception as e:
             print(f"player_taskで例外が発生しました: {e}")
@@ -348,7 +385,7 @@ async def join(ctx):
         vc.listen(sink)
         print("vc.listen 完了")
         bot.loop.create_task(receiver_task(ws, play_queue, sink)) # BG
-        bot.loop.create_task(player_task(play_queue, vc, loop)) #BG
+        bot.loop.create_task(player_task(play_queue, vc, loop, sink)) #BG
         return vc
 
     vc = await connect_and_listen()
