@@ -312,7 +312,72 @@ class LLMEngine:
                     role="assistant_message"
                 )
         return answer_text
+    
+    def generate_game_action(
+            self, 
+            context: str, 
+            action_request: str, 
+            game_memory: list, 
+            game_rules: str,
+            skill_library: list = []
+            ) -> dict:
+        print("Thinking strategy...")
 
+        system_content = self.system_prompt + f"\n\n## Game Rule\n{game_rules}"
+        system_message = [{"role": "system", "content": system_content}]
+
+        user_content = f"""[Current State]
+{context}
+        
+[Next Action List]
+{action_request}
+
+[Output Format]
+以下のJSONキーで必ず回答してください:
+- "action": Next Action Listから選んだアクション
+- "text": そのアクションへのコメント（ましろとして）
+例: {{"action": "選んだアクション", "text": "コメント"}}"""
+
+        messages = system_message + game_memory + [{"role": "user", "content": user_content}]
+        print(game_memory)
+        response = cast(dict[str, Any], self.llm_model.create_chat_completion(
+            messages=cast(List[Any], messages),
+            max_tokens=1024,
+            temperature=1.0,
+            #top_k=64,
+            #top_p=0.95,
+            repeat_penalty=1.1,
+            frequency_penalty=0.3,
+            presence_penalty=0.2,
+            stream=False,
+            response_format={"type": "json_object"},
+            stop=[
+                # Gemma
+                "<end_of_turn>",
+                "<start_of_turn>",
+                # ChatML (Qwen等)
+                "<|im_end|>",
+                "<|endoftext|>",
+                # Llama
+                "</s>",
+                "[INST]",
+                "[/INST]",
+                "<s>",
+                # 共通
+                "\nUser:",
+                "[コンテキスト]",
+                "[/CONTEXT]",
+                ]
+        ))
+
+        answer_text = response['choices'][0]['message']['content'] or ''
+        print(answer_text)
+        try:
+            return json.loads(answer_text)
+        except json.JSONDecodeError as jd:
+            print(f"generate_game_action json decode error: {jd}")
+            return {}
+    
     def _build_prompt_without_examples(self, config):
         identity_text = "\n".join(config["identity"])
         personality_text = "\n".join(config["personality"])

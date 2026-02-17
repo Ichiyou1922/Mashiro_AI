@@ -1,0 +1,288 @@
+============================================================
+【選択画面】
+<!DOCTYPE html><html><head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="author" content="JMHeartley">
+    <meta name="description" content="Play the classic game with against the CPU or with a friend.">
+    <meta name="keywords" content="tic-tac-toe, dreamlo, dreamlo leaderboard, Javascript leaderboard, HTML leaderboard">
+
+    <title>まるばつゲーム | 暇つぶしゲーム</title>
+    <meta name="description" content="ブラウザで遊べるまるばつゲームです。「一人で遊ぶ」ではAIとの対戦もできます。">
+    <link rel="shortcut icon" type="image/png" href="../images/favicon.png">
+    <!-- Google tag (gtag.js) -->
+    <script async="" src="https://www.googletagmanager.com/gtag/js?id=G-W5PEGDNV8M"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+    
+      gtag('config', 'G-W5PEGDNV8M');
+    </script>
+
+    <!-- <link rel="shortcut icon" type="image/png" href="favicon.svg" /> -->
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Concert+One">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Boogaloo">
+</head>
+
+<body>
+
+    <!-- <a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="twitter-share-button" data-show-count="false">Tweet</a><script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script> -->
+    <a href="../" style="position: absolute; top: 4px; right: 10px; color: white; text-decoration: underline; z-index: 10000; font-size: 14px;">暇つぶしゲーム</a>
+    <div style="position: absolute; bottom: 0; left: 10px; padding-left: 10px; color: white; font-size: 14px; z-index: 10;">
+        ブラウザで遊べるまるばつゲームです。「一人で遊ぶ」ではAIとの対戦もできます。
+    </div>
+
+    <!-- <div id="scores">
+        <span id="streak">STREAK: 0</span>
+        <a href="https://github.com/JMHeartley/Tic-Tac-Toe" target="_blank">
+            <img src="github logo.svg" alt="github logo" id="githubLogo">
+        </a>
+        <span id="topScore">TOP: <i>checking</i></span>
+    </div> -->
+    <div id="splash" class="center d-none" style="display: block; opacity: 0.0157084;">まるばつゲーム</div>
+    <div id="menu" class="center d-none">
+        <h2>選択してください</h2>
+        <p class="button" id="playerVsCPU">１人で遊ぶ</p>
+        <p class="button" id="playerVsPlayer">２人で遊ぶ</p>
+        <!-- <p class="button" id="viewLeaderboard">View Leaderboard</p> -->
+    </div>
+    <div id="board" class="center d-none">
+        <h1 id="message"></h1>
+        <div id="thinking" class="center d-none text-center">
+            <span>Thinking...</span>
+            <div id="spinner" class="center"></div>
+        </div>
+        <div class="space c1 r1"></div>
+        <div class="space c2 r1"></div>
+        <div class="space c3 r1"></div>
+        <div class="space c1 r2"></div>
+        <div class="space c2 r2"></div>
+        <div class="space c3 r2"></div>
+        <div class="space c1 r3"></div>
+        <div class="space c2 r3"></div>
+        <div class="space c3 r3"></div>
+        <div id="boardMenu">
+            <p id="playAgain" class="button">もう一度プレイ</p>
+            <p class="backToMenu button">メニューに戻る</p>
+        </div>
+    </div>
+    <div id="nameInput" class="center d-none">
+        <h2 id="nameInputMessage"></h2>
+        <input type="text" id="name">
+        <span id="submit" class="button">Submit</span>
+        <p class="backToMenu button">Cancel</p>
+    </div>
+    <div id="leaderboard" class="center d-none">
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Name</th>
+                    <th>Wins</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+        <div class="backToMenu button">Back to menu</div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dreamlo.js@1.2.0/dist/dreamlo.min.js"></script>
+    <script src="script.js"></script>
+
+
+</body></html>
+============================================================
+【ゲーム開始直後】
+<!DOCTYPE html><html><head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="author" content="JMHeartley">
+    <meta name="description" content="Play the classic game with against the CPU or with a friend.">
+    <meta name="keywords" content="tic-tac-toe, dreamlo, dreamlo leaderboard, Javascript leaderboard, HTML leaderboard">
+
+    <title>まるばつゲーム | 暇つぶしゲーム</title>
+    <meta name="description" content="ブラウザで遊べるまるばつゲームです。「一人で遊ぶ」ではAIとの対戦もできます。">
+    <link rel="shortcut icon" type="image/png" href="../images/favicon.png">
+    <!-- Google tag (gtag.js) -->
+    <script async="" src="https://www.googletagmanager.com/gtag/js?id=G-W5PEGDNV8M"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+    
+      gtag('config', 'G-W5PEGDNV8M');
+    </script>
+
+    <!-- <link rel="shortcut icon" type="image/png" href="favicon.svg" /> -->
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Concert+One">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Boogaloo">
+</head>
+
+<body>
+
+    <!-- <a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="twitter-share-button" data-show-count="false">Tweet</a><script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script> -->
+    <a href="../" style="position: absolute; top: 4px; right: 10px; color: white; text-decoration: underline; z-index: 10000; font-size: 14px;">暇つぶしゲーム</a>
+    <div style="position: absolute; bottom: 0; left: 10px; padding-left: 10px; color: white; font-size: 14px; z-index: 10;">
+        ブラウザで遊べるまるばつゲームです。「一人で遊ぶ」ではAIとの対戦もできます。
+    </div>
+
+    <!-- <div id="scores">
+        <span id="streak">STREAK: 0</span>
+        <a href="https://github.com/JMHeartley/Tic-Tac-Toe" target="_blank">
+            <img src="github logo.svg" alt="github logo" id="githubLogo">
+        </a>
+        <span id="topScore">TOP: <i>checking</i></span>
+    </div> -->
+    <div id="splash" class="center d-none" style="display: block; opacity: 0.0835394;">まるばつゲーム</div>
+    <div id="menu" class="center d-none" style="display: block; opacity: 0.138758;">
+        <h2>選択してください</h2>
+        <p class="button" id="playerVsCPU">１人で遊ぶ</p>
+        <p class="button" id="playerVsPlayer">２人で遊ぶ</p>
+        <!-- <p class="button" id="viewLeaderboard">View Leaderboard</p> -->
+    </div>
+    <div id="board" class="center d-none" style="display: block; opacity: 0.000631522;">
+        <h1 id="message"></h1>
+        <div id="thinking" class="center d-none text-center">
+            <span>Thinking...</span>
+            <div id="spinner" class="center"></div>
+        </div>
+        <div class="space c1 r1"></div>
+        <div class="space c2 r1"></div>
+        <div class="space c3 r1"></div>
+        <div class="space c1 r2"></div>
+        <div class="space c2 r2"></div>
+        <div class="space c3 r2"></div>
+        <div class="space c1 r3"></div>
+        <div class="space c2 r3"></div>
+        <div class="space c3 r3"></div>
+        <div id="boardMenu" style="display: none;">
+            <p id="playAgain" class="button">もう一度プレイ</p>
+            <p class="backToMenu button">メニューに戻る</p>
+        </div>
+    </div>
+    <div id="nameInput" class="center d-none">
+        <h2 id="nameInputMessage"></h2>
+        <input type="text" id="name">
+        <span id="submit" class="button">Submit</span>
+        <p class="backToMenu button">Cancel</p>
+    </div>
+    <div id="leaderboard" class="center d-none">
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Name</th>
+                    <th>Wins</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+        <div class="backToMenu button">Back to menu</div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dreamlo.js@1.2.0/dist/dreamlo.min.js"></script>
+    <script src="script.js"></script>
+
+
+</body></html>
+============================================================
+【1手後（CPU応答後）】
+<!DOCTYPE html><html><head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="author" content="JMHeartley">
+    <meta name="description" content="Play the classic game with against the CPU or with a friend.">
+    <meta name="keywords" content="tic-tac-toe, dreamlo, dreamlo leaderboard, Javascript leaderboard, HTML leaderboard">
+
+    <title>まるばつゲーム | 暇つぶしゲーム</title>
+    <meta name="description" content="ブラウザで遊べるまるばつゲームです。「一人で遊ぶ」ではAIとの対戦もできます。">
+    <link rel="shortcut icon" type="image/png" href="../images/favicon.png">
+    <!-- Google tag (gtag.js) -->
+    <script async="" src="https://www.googletagmanager.com/gtag/js?id=G-W5PEGDNV8M"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+    
+      gtag('config', 'G-W5PEGDNV8M');
+    </script>
+
+    <!-- <link rel="shortcut icon" type="image/png" href="favicon.svg" /> -->
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Concert+One">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Boogaloo">
+</head>
+
+<body>
+
+    <!-- <a href="https://twitter.com/share?ref_src=twsrc%5Etfw" class="twitter-share-button" data-show-count="false">Tweet</a><script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script> -->
+    <a href="../" style="position: absolute; top: 4px; right: 10px; color: white; text-decoration: underline; z-index: 10000; font-size: 14px;">暇つぶしゲーム</a>
+    <div style="position: absolute; bottom: 0; left: 10px; padding-left: 10px; color: white; font-size: 14px; z-index: 10;">
+        ブラウザで遊べるまるばつゲームです。「一人で遊ぶ」ではAIとの対戦もできます。
+    </div>
+
+    <!-- <div id="scores">
+        <span id="streak">STREAK: 0</span>
+        <a href="https://github.com/JMHeartley/Tic-Tac-Toe" target="_blank">
+            <img src="github logo.svg" alt="github logo" id="githubLogo">
+        </a>
+        <span id="topScore">TOP: <i>checking</i></span>
+    </div> -->
+    <div id="splash" class="center d-none" style="display: none;">まるばつゲーム</div>
+    <div id="menu" class="center d-none" style="display: none;">
+        <h2>選択してください</h2>
+        <p class="button" id="playerVsCPU">１人で遊ぶ</p>
+        <p class="button" id="playerVsPlayer">２人で遊ぶ</p>
+        <!-- <p class="button" id="viewLeaderboard">View Leaderboard</p> -->
+    </div>
+    <div id="board" class="center d-none" style="display: block;">
+        <h1 id="message"></h1>
+        <div id="thinking" class="center d-none text-center" style="display: none;">
+            <span>Thinking...</span>
+            <div id="spinner" class="center"></div>
+        </div>
+        <div class="space c1 r1" style="color: rgb(46, 139, 87); background: rgb(21, 238, 22);">X</div>
+        <div class="space c2 r1"></div>
+        <div class="space c3 r1" style="color: rgb(201, 44, 44); background: rgb(246, 84, 106);">O</div>
+        <div class="space c1 r2"></div>
+        <div class="space c2 r2"></div>
+        <div class="space c3 r2"></div>
+        <div class="space c1 r3"></div>
+        <div class="space c2 r3"></div>
+        <div class="space c3 r3"></div>
+        <div id="boardMenu" style="display: none;">
+            <p id="playAgain" class="button">もう一度プレイ</p>
+            <p class="backToMenu button">メニューに戻る</p>
+        </div>
+    </div>
+    <div id="nameInput" class="center d-none">
+        <h2 id="nameInputMessage"></h2>
+        <input type="text" id="name">
+        <span id="submit" class="button">Submit</span>
+        <p class="backToMenu button">Cancel</p>
+    </div>
+    <div id="leaderboard" class="center d-none">
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Name</th>
+                    <th>Wins</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+        <div class="backToMenu button">Back to menu</div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dreamlo.js@1.2.0/dist/dreamlo.min.js"></script>
+    <script src="script.js"></script>
+
+
+</body></html>

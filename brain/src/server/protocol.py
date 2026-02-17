@@ -44,11 +44,11 @@ ClientGameMessageType = Literal[
 
 ServerGameMessageType = "action"
 
-def create_game_start_message(game_name: str):
+def create_game_start_message(game_name: str, rules: str):
     """ゲームの開始を知らせるメッセージの作成"""
     return json.dumps({
         "type": "game_start",
-        "payload": {"game": game_name}
+        "payload": {"game_name": game_name, "rules": rules}
     })
 
 def create_context_request_message(message: str, action_request: str = ''):

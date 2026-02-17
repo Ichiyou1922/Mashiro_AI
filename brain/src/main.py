@@ -288,11 +288,13 @@ async def player_task(audio_queue, vc, loop, sink: MyAudioSink):
             
             audio_source = discord.FFmpegPCMAudio(io.BytesIO(audio_data), pipe=True, before_options="-loglevel error")
             audio_source_custom = VolumeMonitor(audio_source, fastapi.godot_queue, loop)
-            await fastapi.godot_queue.put({"type": "state", "state": "speaking"})
+            if fastapi.godot_queue:
+                await fastapi.godot_queue.put({"type": "state", "state": "speaking"})
             sink.ai_state = "speaking"
             vc.play(audio_source_custom, after=after_callback)
             await done_event.wait()
-            await fastapi.godot_queue.put({"type": "state", "state": "idle"})
+            if fastapi.godot_queue:
+                await fastapi.godot_queue.put({"type": "state", "state": "idle"})
             sink.ai_state = "idle"
             # print("再生終了")
         except Exception as e:

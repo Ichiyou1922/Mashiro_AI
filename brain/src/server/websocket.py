@@ -3,7 +3,7 @@ import sys
 # パス解決のおまじない
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI, WebSocket
-from .protocol import create_state_message,create_subtitle_message, parse_client_message, create_error_message, create_done_message, create_text_response_message, create_emotion_message, create_autonomous_message, create_volume_message
+from .protocol import create_state_message,create_subtitle_message, parse_client_message, create_error_message, create_done_message, create_text_response_message, create_emotion_message, create_autonomous_message, create_volume_message, create_action_message
 import websockets
 import asyncio
 from core.llm_engine import LLMEngine
@@ -18,13 +18,13 @@ from utils.tools import execute, vision_tool
 from memory.reflection import ReflectionManager
 import re
 import time
+from collections import deque
 
 
 app = FastAPI()
 
 stt = STTEngine(model="groq")
 llm = LLMEngine("llama")
-
 tts = TTSEngine()
 
 vad = VADEngine()
@@ -43,11 +43,15 @@ ai_state = "idle"
 
 godot_queue: asyncio.Queue | None = None
 
+voice_text_queue: asyncio.Queue | None = None
+
 @app.websocket("/ws/voice")
 async def voice_endpoint(websocket: WebSocket):
     await websocket.accept()
+    global voice_text_queue
     audio_queue = asyncio.Queue()
     text_queue = asyncio.Queue()
+    voice_text_queue = text_queue
 
     try:
         while True:
@@ -63,6 +67,9 @@ async def voice_endpoint(websocket: WebSocket):
     except Exception as e:
         print(f"audio_endpoint disconnected: {e}")
         await websocket.close()
+    
+    finally:
+        voice_text_queue = None
 
 @app.websocket("/ws/text")
 async def text_endpoint(websocket: WebSocket):
@@ -111,6 +118,69 @@ async def godot_endpoint(websocket: WebSocket):
         print(f"godot_endpoint disconnected: {e}")
         godot_queue = None
 
+@app.websocket("/ws/game")
+async def game_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    global voice_text_queue
+    loop = asyncio.get_event_loop()
+    game_memory = deque(maxlen=16)
+    game_rules = ""
+    try:
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+            if message["type"] == "websocket.receive" and "text" in message:
+                msg = parse_client_message(message["text"])
+                if msg["type"] == "game_start":
+                    game_name = msg["payload"]["game_name"]
+                    game_rules = msg["payload"]["rules"]
+                elif msg["type"] == "context":
+                    context = msg["payload"]["context"]
+                    action_request = msg["payload"]["action_request"]
+                    if action_request:
+                        game_memory.append({"role": "user", "content": context})
+                        # game_memory.append({"role": "user", "content": action_request})
+                        result = {}
+                        max_retry = 3
+                        retry_count = 0
+                        while result == {} and retry_count < max_retry:
+                            result = await loop.run_in_executor(None, llm.generate_game_action, context, action_request, list(game_memory), game_rules)
+                            retry_count += 1
+                        if result == {}:
+                            await websocket.send_text(create_error_message("fault create action"))
+                            # pywright側で停止
+                            break
+                        if result["action"]:
+                            # 仮置き
+                            text = result["text"]
+                            if voice_text_queue:
+                                await voice_text_queue.put({"type": "state", "state": "speaking"})
+                                await voice_text_queue.put({"type": "text", "data": text})
+                                await voice_text_queue.put({"type": "done"})
+                            memory_store.short_term.append({"role": "assistant_message", "text": text, "user_name": "ましろ", "timestamp": time.time(), "importance": 0})
+                            action = result["action"]
+                            game_memory.append({"role": "assistant", "content": text + action})
+                            await websocket.send_text(create_action_message(action))
+                        else:
+                            # actionが無いならただの会話である
+                            text = result["text"]
+                            if voice_text_queue:
+                                await voice_text_queue.put({"type": "state", "state": "speaking"})
+                                await voice_text_queue.put({"type": "text", "data": text})
+                                await voice_text_queue.put({"type": "done"})
+                            memory_store.short_term.append({"role": "assistant_message", "text": text, "user_name": "ましろ", "timestamp": time.time(), "importance": 0})
+                            game_memory.append({"role": "assistant", "content": text})
+                            
+                    else:
+                        game_memory.append({"role": "user", "content": context})
+                    
+                elif msg["type"] == "action_result":
+                    action_result = msg["payload"]["action_result"]
+                    game_memory.append({"role": "user", "content": action_result})
+    except Exception as e:
+        print(f"game_endpoint disconnected: {e}")
+
 
 async def reflection_timer(websocket: WebSocket):
     loop = asyncio.get_event_loop()    
@@ -128,7 +198,8 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
     中枢神経ループ 今の所沈黙を検知して発火
     今後追加予定
     - social
-    - bored
+    - boredom
+    - energy
     - ???
     """
     global last_interaction_time
