@@ -78,11 +78,11 @@ class MemoryStore():
             self.table
             .search()
             .where("is_reflection = True")
-            .limit(limit * 3)
-            .to_list()
+            .to_list()  # limitなし
         )
         sorted_results = sorted(results, key=lambda x: x["timestamp"], reverse=True)
         return sorted_results[:limit]
+
 
         
     

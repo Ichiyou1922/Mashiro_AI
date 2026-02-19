@@ -8,7 +8,7 @@ import time
 
 load_dotenv()
 
-MASHIRO_ID = int(os.getenv("MASHIRO_ID"))
+MASHIRO_ID = int(os.getenv("MASHIRO_ID", "0"))
 
 class ReflectionManager:
     def __init__(self):
@@ -17,7 +17,7 @@ class ReflectionManager:
 
     def check_and_trigger(self, importance_sum: float) -> bool:
         """importanceの合計を取得してreflectionするかどうかを返す"""
-        if importance_sum >= 150:
+        if importance_sum >= 10.0:
             return True
         else:
             return False

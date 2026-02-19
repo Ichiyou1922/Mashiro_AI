@@ -19,16 +19,14 @@ load_dotenv()
 
 config_name = "mashiro_config_v3.json"
 model_name = "mashiro_v10.gguf"
-MASHIRO_ID = int(os.getenv("MASHIRO_ID"))
+MASHIRO_ID = int(os.getenv("MASHIRO_ID", "0"))
 
 class LLMEngine:
     """
     LLMエンジン
     backend: "llama"
     """
-    def __init__(self, backend: str = "llama", n_ctx: int = 2048):
-        self.backend = backend
-
+    def __init__(self, n_ctx: int = 2048):
         # 記憶関連
         self.user_profile_store = UserProfileStore()
         self.last_assistant_timestamp = None
@@ -48,27 +46,70 @@ class LLMEngine:
             self.system_message.append({"role": "user", "content": ex["user"]})
             self.system_message.append({"role": "assistant", "content": ex["assistant"]})
         '''
-        # ========== Llama (ローカル) ==========
-        if backend == "llama":
-            self.llm_path = os.path.expanduser(
-                f"{MODEL_PATH}/{model_name}"
-            )
-            self.llm_model = Llama(
-                model_path=self.llm_path,
-                n_gpu_layers=-1, # -1だと全レイヤーをGPUに
-                n_ctx=n_ctx,
-                # cache_type_k="q4_0",
-                # cache_type_v="q4_0",
-                # chat_format = "qwen",
-                chat_format="llama-3",
-                flash_attn=True,
+
+        self.llm_path = os.path.expanduser(
+            f"{MODEL_PATH}/{model_name}"
+        )
+        self.llm_model = Llama(
+            model_path=self.llm_path,
+            n_gpu_layers=-1, # -1だと全レイヤーをGPUに
+            n_ctx=n_ctx,
+            # cache_type_k="q4_0",
+            # cache_type_v="q4_0",
+            # chat_format = "qwen",
+            chat_format="llama-3",
+            flash_attn=True,
                 verbose=False
-            )
+        )
 
+        print(f"LLM 準備完了")
+
+    def _call_llm(self, messages: List[dict], response_format=None) -> str:
+        """LLMを呼び出す共通関数"""
+        response = cast(dict[str, Any], self.llm_model.create_chat_completion(
+            messages=cast(List[Any], messages),
+            max_tokens=1024,
+            temperature=1.0,
+            #top_k=64,
+            #top_p=0.95,
+            repeat_penalty=1.1,
+            frequency_penalty=0.3,
+            presence_penalty=0.2,
+            stream=False,
+            response_format=response_format,
+            stop=[
+                # Gemma
+                "<end_of_turn>",
+                "<start_of_turn>",
+                # ChatML (Qwen等)
+                "<|im_end|>",
+                "<|endoftext|>",
+                # Llama
+                "</s>",
+                "[INST]",
+                "[/INST]",
+                "<s>",
+                # 共通
+                "\nUser:",
+                "[コンテキスト]",
+                "[/CONTEXT]",
+            ]
+        ))
+        answer_text: str = response['choices'][0]['message']['content'] or ""
+        return answer_text
+
+    def _clean_response(self, text: str) -> str:
+        """LLMの応答から特殊トークンを除去する共通関数"""
+        if '<function=' not in text:
+            for s in ["<|im_end|>", "<|endoftext|>", "<think>", "</think>", "<end_of_turn>", "<start_of_turn>"]:
+                text = text.replace(s, "")
+            for s in ["ましろ:", "ましろ：", "[ツール実行結果]"]:
+                text = text.removeprefix(s)
+            pattern = r"^\[.*?]\s"
+            text = re.sub(pattern, "", text)
+            return text.strip()
         else:
-            raise ValueError(f"Unknown backend: {backend}")
-
-        print(f"LLM 準備完了 (backend: {backend})")
+            return text.strip()
 
     def generate(self, user_id: int, user_text: str, user_name: str="User", 
              save_user: bool=True, tool_context=None) -> str:
@@ -147,58 +188,20 @@ class LLMEngine:
         else:
             messages = system_messages + scored_memory_lines + memory_lines + [{"role": "user", "content": f"{self.user_profile_store.get_name(user_id)}の発言" + user_text}]
         
-        # ========== Llama ==========
-        if self.backend == "llama":
-            response = cast(dict[str, Any], self.llm_model.create_chat_completion(
-                messages=cast(List[Any], messages),
-                max_tokens=1024,
-                temperature=1.0,
-                #top_k=64,
-                #top_p=0.95,
-                repeat_penalty=1.1,
-                frequency_penalty=0.3,
-                presence_penalty=0.2,
-                stream=False,
-                stop=[
-                    # Gemma
-                    "<end_of_turn>",
-                    "<start_of_turn>",
-                    # ChatML (Qwen等)
-                    "<|im_end|>",
-                    "<|endoftext|>",
-                    # Llama
-                    "</s>",
-                    "[INST]",
-                    "[/INST]",
-                    "<s>",
-                    # 共通
-                    "\nUser:",
-                    "[コンテキスト]",
-                    "[/CONTEXT]",
-                    ]
-            ))
-            answer_text: str = response['choices'][0]['message']['content'] or ""
-            if save_user == True:
-                memory_store.add_memory(
-                    text=user_text,
-                    user_id=user_id,
-                    user_name=display_name,
-                    role="user_message"
-                )
-    
-        else:
-            raise ValueError(f"Unknown backend: {self.backend}")
+        answer_text = self._call_llm(messages=messages)
+
+        if save_user:
+            memory_store.add_memory(
+                text=user_text,
+                user_id=user_id,
+                user_name=display_name,
+                role="user_message"
+            )
 
         # print(f"[Debug] ましろ生: {answer_text}")
         # 特殊トークンの除去
         if '<function=' not in answer_text:
-            for s in ["<|im_end|>", "<|endoftext|>", "<think>", "</think>", "<end_of_turn>", "<start_of_turn>"]:
-                answer_text = answer_text.replace(s, "")
-            for s in ["ましろ:", "ましろ：", "[ツール実行結果]"]:
-                answer_text = answer_text.removeprefix(s)
-            pattern = r"^\[.*?]\s"
-            answer_text = re.sub(pattern, "", answer_text)
-            answer_text = answer_text.strip()
+            answer_text = self._clean_response(answer_text)
             # adjust_importanceのためにtimestampを保持
             self.last_assistant_timestamp = memory_store.add_memory(
                 text=answer_text,
@@ -208,13 +211,13 @@ class LLMEngine:
             )
         return answer_text
     
-    def generate_autonomous(self, impulse_text: str, tool_context: None, user_name: str = 'User'):
+    def generate_autonomous(self, impulse_text: str, tool_context: None):
         """自己発話を生成する"""
         internal_signal = f"""
 [内部シグナル] 
 以下はあなたの潜在意識/身体からの衝動であり、ユーザーからの直接のメッセージではありません。
 条件: {impulse_text} 
-指示: この衝動に自然に反応してください。新しいトピックを始めたり、独り言を言ったり、ユーザーに質問したりしても構いません。
+指示: この衝動に自然に反応してください。新しいトピックを始めたり、独り言を言ったり、検索したり、ユーザーに質問したりしても構いません。
 """
         reflections = memory_store.get_reflection(limit=3)
         if reflections:
@@ -256,53 +259,18 @@ class LLMEngine:
         print("===memory===")
         print(memory_lines)
         if tool_context is not None:
-            messages = system_messages + scored_memory_lines + memory_lines + [{"role": "assistant", "content": tool_context["mashiro_function_calling"]}] + [{"role": "ipython", "content": tool_context["tool_result"]}] + [{"role": "user", "content": internal_signal}]
+            messages = system_messages + scored_memory_lines + memory_lines + [{"role": "assistant", "content": tool_context["mashiro_function_calling"]}] + [{"role": "ipython", "content": tool_context["tool_result"]}]
             # print(messages)
         else:
             messages = system_messages + scored_memory_lines + memory_lines + [{"role": "user", "content": internal_signal}]
             # print(messages)
 
-        response = cast(dict[str, Any], self.llm_model.create_chat_completion(
-            messages=cast(List[Any], messages),
-            max_tokens=1024,
-            temperature=1.0,
-            #top_k=64,
-            #top_p=0.95,
-            repeat_penalty=1.1,
-            frequency_penalty=0.3,
-            presence_penalty=0.2,
-            stream=False,
-            stop=[
-                # Gemma
-                "<end_of_turn>",
-                "<start_of_turn>",
-                # ChatML (Qwen等)
-                "<|im_end|>",
-                "<|endoftext|>",
-                # Llama
-                "</s>",
-                "[INST]",
-                "[/INST]",
-                "<s>",
-                # 共通
-                "\nUser:",
-                "[コンテキスト]",
-                "[/CONTEXT]",
-            ]
-        ))
-
-        answer_text: str = response['choices'][0]['message']['content'] or ""
+        answer_text = self._call_llm(messages=messages)
 
         # print(f"[Debug] ましろ生: {answer_text}")
         # 特殊トークンの除去
         if '<function=' not in answer_text:
-            for s in ["<|im_end|>", "<|endoftext|>", "<think>", "</think>", "<end_of_turn>", "<start_of_turn>"]:
-                answer_text = answer_text.replace(s, "")
-            for s in ["ましろ:", "ましろ：", "[ツール実行結果]"]:
-                answer_text = answer_text.removeprefix(s)
-            pattern = r"^\[.*?]\s"
-            answer_text = re.sub(pattern, "", answer_text)
-            answer_text = answer_text.strip()
+            answer_text = self._clean_response(answer_text)
             # adjust_importanceのためにtimestampを保持
             if not answer_text.startswith("..."):
                 self.last_assistant_timestamp = memory_store.add_memory(
@@ -339,38 +307,9 @@ class LLMEngine:
 例: {{"action": "選んだアクション", "text": "コメント"}}"""
 
         messages = system_message + game_memory + [{"role": "user", "content": user_content}]
-        print(game_memory)
-        response = cast(dict[str, Any], self.llm_model.create_chat_completion(
-            messages=cast(List[Any], messages),
-            max_tokens=1024,
-            temperature=1.0,
-            #top_k=64,
-            #top_p=0.95,
-            repeat_penalty=1.1,
-            frequency_penalty=0.3,
-            presence_penalty=0.2,
-            stream=False,
-            response_format={"type": "json_object"},
-            stop=[
-                # Gemma
-                "<end_of_turn>",
-                "<start_of_turn>",
-                # ChatML (Qwen等)
-                "<|im_end|>",
-                "<|endoftext|>",
-                # Llama
-                "</s>",
-                "[INST]",
-                "[/INST]",
-                "<s>",
-                # 共通
-                "\nUser:",
-                "[コンテキスト]",
-                "[/CONTEXT]",
-                ]
-        ))
-
-        answer_text = response['choices'][0]['message']['content'] or ''
+        # print(game_memory)
+        answer_text = self._call_llm(messages=messages, response_format={"type": "json_object"})
+        print(f"[Debug] ましろの戦略: {answer_text}")
         print(answer_text)
         try:
             return json.loads(answer_text)

@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 # パス解決のおまじない
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from groq import Groq
+from groq.types.chat import ChatCompletionMessageParam
 
 
 load_dotenv()
@@ -15,7 +16,7 @@ groq_client = Groq(
 groq_model = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 def analyze_image(url: str) -> str:
-    message = [
+    message: list[ChatCompletionMessageParam] = [
         {
             "role": "user",
             "content": [

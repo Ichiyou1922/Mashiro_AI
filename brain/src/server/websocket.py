@@ -24,7 +24,7 @@ from collections import deque
 app = FastAPI()
 
 stt = STTEngine(model="groq")
-llm = LLMEngine("llama")
+llm = LLMEngine()
 # 'voicevox' or 'qwen' or 'azure'
 tts = TTSEngine(backend='voicevox')
 
@@ -48,7 +48,7 @@ voice_text_queue: asyncio.Queue | None = None
 
 interrupt_event: asyncio.Event | None = None
 
-lock: asyncio.Lock | None = None
+lock = asyncio.Lock()
 
 @app.websocket("/ws/voice")
 async def voice_endpoint(websocket: WebSocket):
@@ -82,8 +82,6 @@ async def voice_endpoint(websocket: WebSocket):
 @app.websocket("/ws/text")
 async def text_endpoint(websocket: WebSocket):
     await websocket.accept()
-    global lock
-    lock = asyncio.Lock()
     try:
         while True:
             await asyncio.gather(
@@ -193,6 +191,37 @@ async def game_endpoint(websocket: WebSocket):
     except Exception as e:
         print(f"game_endpoint disconnected: {e}")
 
+async def _get_final_response(text: str, user_id: int, image_url: str | None = None) -> str:
+    global importance_counter
+    loop = asyncio.get_event_loop()
+    if image_url:
+        vision_text = await loop.run_in_executor(None, vision_tool.analyze_image, image_url)
+        text = f"{text} [画像の説明]: {vision_text}"
+
+    print(f"{user_profile.get_name(user_id)}: {text}")
+    async with lock:
+        response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
+    result = parse_tool(response)
+
+    importance_counter += 1
+    if importance_counter >= 20:
+        asyncio.ensure_future(loop.run_in_executor(None, memory_store.evaluate_importance))
+        importance_counter = 0
+
+    print(result)
+    if type(result) is dict:
+        if result["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
+            tool_result = execute(result["tool_name"], result["param"])
+            memory_store.short_term.append({"text": tool_result, "role": "tool_result", "user_name": "system", "timestamp": time.time()})
+            print(tool_result)
+            include_tool_text = {
+                "mashiro_function_calling": response,
+                "tool_result": tool_result
+            }
+            async with lock:
+                response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
+
+    return response
 
 async def reflection_timer(websocket: WebSocket):
     loop = asyncio.get_event_loop()    
@@ -220,6 +249,7 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
     global ignore_counter
     global ai_state
     global godot_queue
+    global importance_counter
 
     boredom_threshold = 30.0
     check_interval = 1.0
@@ -248,8 +278,24 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
                 implus = f"ユーザーからの返事がありません。{ignore_counter}回目です。今までの会話から何を話すべきか、それとも話さないべきなのかを考えてください。話すべきなら返答を、話さないなら「...」を出力してください。"
                 async with lock:
                     response = await loop.run_in_executor(None, llm.generate_autonomous, implus, None)
+                result = parse_tool(response)
 
-                clean_text, emotion = parse_emotion(response)
+                importance_counter += 1
+                if importance_counter >= 20:
+                    asyncio.ensure_future(loop.run_in_executor(None, memory_store.evaluate_importance))
+                    importance_counter = 0
+
+                if type(result) is dict and result["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
+                    tool_result = execute(result["tool_name"], result["param"])
+                    print(f"Autonomous Tool Result: {tool_result}")
+                    include_tool_text = {
+                        "autonomous_function_calling": result,
+                        "tool_result": tool_result
+                    }
+                    async with lock:
+                        response = await loop.run_in_executor(None, llm.generate_autonomous, implus, include_tool_text)
+                else:
+                    clean_text, emotion = parse_emotion(response)
 
                 if clean_text.startswith("..."):
                     print("ましろは喋らない選択をしました。")
@@ -270,7 +316,7 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
                 print(f"ましろtext: {clean_text}")
                 print("Discordに流したよ")
 
-                parsed_result = re.split('([、。？！…]|\.{3}|\.{6})', clean_text)
+                parsed_result = re.split(r'([、。？！…]|\.{3}|\.{6})', clean_text)
                 for text in parsed_result:
                     if text.strip():
                         await text_queue.put({"type": "text", "data": text})
@@ -299,32 +345,7 @@ async def text_receiver(websocket: WebSocket):
                     image_url = msg["payload"].get("image_url")
                     print("textを受信したよ")
 
-                    if image_url:
-                        vision_text = await loop.run_in_executor(None, vision_tool.analyze_image, image_url)
-                        text = f"{text} [画像の説明]: {vision_text}"
-
-                    print(f"{user_profile.get_name(user_id)}: {text}")
-                    async with lock:
-                        response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
-                    result = parse_tool(response)
-
-                    importance_counter += 1
-                    if importance_counter >= 20:
-                        asyncio.ensure_future(loop.run_in_executor(None, memory_store.evaluate_importance))
-                        importance_counter = 0
-
-                    print(result)
-                    if type(result) is dict:
-                        if result["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
-                            tool_result = execute(result["tool_name"], result["param"])
-                            memory_store.short_term.append({"text": tool_result, "role": "tool_result", "user_name": "system", "timestamp": time.time()})
-                            print(tool_result)
-                            include_tool_text = {
-                                "mashiro_function_calling": response,
-                                "tool_result": tool_result
-                            }
-                            async with lock:
-                                response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
+                    response = await _get_final_response(text, user_id, image_url)
                         
                     print("メッセージを生成したよ")
                     clean_text, emotion = parse_emotion(response)
@@ -424,40 +445,13 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
 
                 print(f"{user_id}: {text}")
                 await websocket.send_text(create_subtitle_message(f"{user_id}: {text}", True))
-                # stream
-                # generator = llm.generate_stream(user_id, str(text), user_profile.get_name(user_id) or "User")
-                # await loop.run_in_executor(None, producer_task_sync, generator, text_queue, loop)
-
-                # generate
-                async with lock:
-                    response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
-                result = parse_tool(response)
-
-                importance_counter += 1
-                if importance_counter >= 20:
-                    asyncio.ensure_future(loop.run_in_executor(None, memory_store.evaluate_importance))
-                    importance_counter = 0
-
-                print(result)
-                if type(result) is dict:
-                    if result["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
-                        tool_result = execute(result["tool_name"], result["param"])
-                        memory_store.short_term.append({"text": tool_result, "role": "tool_result", "user_name": "system", "timestamp": time.time()})
-                        print(tool_result)
-                        include_tool_text = {
-                            "mashiro_function_calling": response,
-                            "tool_result": tool_result
-                        }
-                        async with lock:
-                            response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
+                
+                response = await _get_final_response(text, user_id)
                         
                 print("メッセージを生成したよ")
-                parsed_result = []
-                # response(タグ込み)を句読点で分割する
-                # parsed_result = re.split('([、。？！…]|\.{3}|\.{6})', response)
                 # 句点で分割し、区切り文字を前のセグメントに結合する
                 # 例: "こんにちは。元気？" → ["こんにちは。", "元気？"]
-                raw_split = re.split('([。？！…])', response)
+                raw_split = re.split(r'([。？！…])', response)
                 parsed_result = []
                 for i in range(0, len(raw_split), 2):
                     chunk = raw_split[i]
@@ -508,17 +502,25 @@ async def message_send(text_queue: asyncio.Queue, websocket: WebSocket):
     while True:
         # data = await text_queue.get()
         get_task = asyncio.create_task(text_queue.get())
-        int_task = asyncio.create_task(interrupt_event.wait())
+        if interrupt_event:
+            int_task = asyncio.create_task(interrupt_event.wait())
 
-        done, pending = await asyncio.wait(
-            [get_task, int_task],
-            return_when=asyncio.FIRST_COMPLETED
-        )
+            done, pending = await asyncio.wait(
+                [get_task, int_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+        else:
+            done, pending = await asyncio.wait(
+                [get_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            int_task = None
+
         for t in pending:
             t.cancel()
 
         try:
-            if int_task in done:
+            if int_task and int_task in done:
                 print("websocket interrupt detected")
                 ai_state = "idle"
                 await websocket.send_text(create_state_message("idle"))
@@ -527,7 +529,8 @@ async def message_send(text_queue: asyncio.Queue, websocket: WebSocket):
                 # memory_store.short_term.append({"text": response, "role": "assistant_message", "user_name": "ましろ", "timestamp": time.time()})
                 while not text_queue.empty():
                     text_queue.get_nowait()
-                interrupt_event.clear()
+                if interrupt_event:
+                    interrupt_event.clear()
                 spoken_chunks = []
             else:
                 data = get_task.result()
@@ -577,56 +580,3 @@ async def message_send(text_queue: asyncio.Queue, websocket: WebSocket):
             print(f"audio_send error: {e}")
             await websocket.send_text(create_error_message(f"audio_send error: {e}"))
             continue
-
-def producer_task_sync(generator, text_queue, loop):
-    buffer = ''
-    full_text = ''
-    flag = 0
-    emotion_flag = 0
-    for token in generator:
-        try:
-            if token is None:
-                if buffer:
-                    loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "text", "data": buffer})
-                    buffer = ''
-                loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "done"})
-                loop.call_soon_threadsafe(text_queue.put_nowait, None)
-                break
-
-            elif token in ["、", "。", "！", "？", "..."]:
-                if buffer:
-                    if flag == 0:
-                        loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "state", "state": "speaking"})
-                        flag += 1
-                    loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "text", "data": buffer + token})
-                    full_text += buffer + token
-                    buffer = ''
-                else:
-                    print("buffer is empty")
-                    continue
-
-            elif token == '[' or emotion_flag >= 1:
-                emotion_flag += 1
-                if token == ']':
-                    loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "emotion", "data": buffer.strip('[]')})
-                    buffer = ''
-                    emotion_flag = 0
-                    continue
-  
-                buffer += token
-                
-
-            else:
-                if flag == 0:
-                    loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "state", "state": "speaking"})
-                    flag += 1
-                buffer += token
-        except Exception as e:
-            print(f"procuder_task error: {e}")
-            continue
-    else:
-        if buffer:
-            loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "text", "data": buffer})
-        loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "done"})
-        loop.call_soon_threadsafe(text_queue.put_nowait, None)
-        

@@ -13,7 +13,7 @@ class AudioProcessor:
         audio = audio.astype(np.float32) / 32768.0 # int16からfloat32に変換
         return sr, audio
     
-    def pitch_shift(self, audio_array: np.ndarray, sr: int, n_steps: float=None) -> np.ndarray:
+    def pitch_shift(self, audio_array: np.ndarray, sr: int, n_steps: float=0.0) -> np.ndarray:
         """音声のピッチをn_steps分シフトする"""
         if n_steps is None:
             n_steps = self.n_steps
