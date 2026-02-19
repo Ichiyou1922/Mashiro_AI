@@ -54,6 +54,7 @@ class STTEngine:
             "ご視聴ありがとうございました。",
             "ありがとうございました。",
             "おめでとうございます。"
+            "おわり。"
             ""
         }
 
@@ -71,7 +72,7 @@ class STTEngine:
             condition_on_previous_text=False,
             vad_filter=True,
             no_speech_threshold=0.6,
-            initial_prompt="えーと、あー、うーん、そのー" # フィラーの追加
+            initial_prompt="えーと、あー、うーん、そのーなどのフィラーを含めること" # フィラーの追加
         )
         text = ""
         for segment in segments:

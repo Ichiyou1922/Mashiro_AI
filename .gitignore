@@ -21,3 +21,5 @@ __pycache__/
 .env
 .env.*
 CLAUDE.md
+HANDOFF.md
+brain/google_tts_key.json

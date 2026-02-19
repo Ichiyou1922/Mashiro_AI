@@ -67,12 +67,10 @@ def create_action_result_message(message: str):
 
 def create_action_message(message: str):
     """LLMの行動を知らせるメッセージの作成"""
-    return json.dumps({
+    return json.dumps({          
         "type": "action",
         "payload": {"action": message}
     })
-
-
 
 # メッセージ作成関数
 def create_state_message(state: AIState) -> str:
@@ -161,4 +159,10 @@ def create_autonomous_message(text):
         "payload": {
             "text": text
         }
+    })
+
+def create_interrupt_message():
+    """音声再生中の割り込みメッセージを作成"""
+    return json.dumps({
+        "type": "interrupt"
     })

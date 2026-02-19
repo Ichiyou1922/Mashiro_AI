@@ -25,7 +25,8 @@ app = FastAPI()
 
 stt = STTEngine(model="groq")
 llm = LLMEngine("llama")
-tts = TTSEngine()
+# 'voicevox' or 'qwen' or 'azure'
+tts = TTSEngine(backend='voicevox')
 
 vad = VADEngine()
 
@@ -45,13 +46,20 @@ godot_queue: asyncio.Queue | None = None
 
 voice_text_queue: asyncio.Queue | None = None
 
+interrupt_event: asyncio.Event | None = None
+
+lock: asyncio.Lock | None = None
+
 @app.websocket("/ws/voice")
 async def voice_endpoint(websocket: WebSocket):
     await websocket.accept()
     global voice_text_queue
+    global interrupt_event
     audio_queue = asyncio.Queue()
     text_queue = asyncio.Queue()
+    interrupt_event = asyncio.Event()
     voice_text_queue = text_queue
+
 
     try:
         while True:
@@ -74,6 +82,8 @@ async def voice_endpoint(websocket: WebSocket):
 @app.websocket("/ws/text")
 async def text_endpoint(websocket: WebSocket):
     await websocket.accept()
+    global lock
+    lock = asyncio.Lock()
     try:
         while True:
             await asyncio.gather(
@@ -122,6 +132,7 @@ async def godot_endpoint(websocket: WebSocket):
 async def game_endpoint(websocket: WebSocket):
     await websocket.accept()
     global voice_text_queue
+    global lock
     loop = asyncio.get_event_loop()
     game_memory = deque(maxlen=16)
     game_rules = ""
@@ -145,7 +156,8 @@ async def game_endpoint(websocket: WebSocket):
                         max_retry = 3
                         retry_count = 0
                         while result == {} and retry_count < max_retry:
-                            result = await loop.run_in_executor(None, llm.generate_game_action, context, action_request, list(game_memory), game_rules)
+                            async with lock:
+                                result = await loop.run_in_executor(None, llm.generate_game_action, context, action_request, list(game_memory), game_rules)
                             retry_count += 1
                         if result == {}:
                             await websocket.send_text(create_error_message("fault create action"))
@@ -158,7 +170,7 @@ async def game_endpoint(websocket: WebSocket):
                                 await voice_text_queue.put({"type": "state", "state": "speaking"})
                                 await voice_text_queue.put({"type": "text", "data": text})
                                 await voice_text_queue.put({"type": "done"})
-                            memory_store.short_term.append({"role": "assistant_message", "text": text, "user_name": "ましろ", "timestamp": time.time(), "importance": 0})
+                            # memory_store.short_term.append({"role": "assistant_message", "text": text, "user_name": "ましろ", "timestamp": time.time(), "importance": 0})
                             action = result["action"]
                             game_memory.append({"role": "assistant", "content": text + action})
                             await websocket.send_text(create_action_message(action))
@@ -169,7 +181,7 @@ async def game_endpoint(websocket: WebSocket):
                                 await voice_text_queue.put({"type": "state", "state": "speaking"})
                                 await voice_text_queue.put({"type": "text", "data": text})
                                 await voice_text_queue.put({"type": "done"})
-                            memory_store.short_term.append({"role": "assistant_message", "text": text, "user_name": "ましろ", "timestamp": time.time(), "importance": 0})
+                            # memory_store.short_term.append({"role": "assistant_message", "text": text, "user_name": "ましろ", "timestamp": time.time(), "importance": 0})
                             game_memory.append({"role": "assistant", "content": text})
                             
                     else:
@@ -234,8 +246,8 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
 
                 loop = asyncio.get_event_loop()
                 implus = f"ユーザーからの返事がありません。{ignore_counter}回目です。今までの会話から何を話すべきか、それとも話さないべきなのかを考えてください。話すべきなら返答を、話さないなら「...」を出力してください。"
-
-                response = await loop.run_in_executor(None, llm.generate_autonomous, implus, None)
+                async with lock:
+                    response = await loop.run_in_executor(None, llm.generate_autonomous, implus, None)
 
                 clean_text, emotion = parse_emotion(response)
 
@@ -292,8 +304,8 @@ async def text_receiver(websocket: WebSocket):
                         text = f"{text} [画像の説明]: {vision_text}"
 
                     print(f"{user_profile.get_name(user_id)}: {text}")
-
-                    response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
+                    async with lock:
+                        response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
                     result = parse_tool(response)
 
                     importance_counter += 1
@@ -311,7 +323,8 @@ async def text_receiver(websocket: WebSocket):
                                 "mashiro_function_calling": response,
                                 "tool_result": tool_result
                             }
-                            response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
+                            async with lock:
+                                response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
                         
                     print("メッセージを生成したよ")
                     clean_text, emotion = parse_emotion(response)
@@ -334,6 +347,7 @@ async def audio_receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
     global importance_counter
     global last_interaction_time
     global ignore_counter
+    global interrupt_event
 
     try:
         while True:
@@ -358,8 +372,9 @@ async def audio_receiver(websocket: WebSocket, audio_queue: asyncio.Queue):
                         await audio_queue.put((None, None))
 
                     elif msg["type"] == "interrupt":
-                        # TODO: 割り込み処理
-                        pass
+                        if interrupt_event is not None:
+                            print("interrupt_event set")
+                            interrupt_event.set()
 
                     elif msg["type"] == "cancel":
                         # TODO: キャンセル処理
@@ -414,7 +429,8 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                 # await loop.run_in_executor(None, producer_task_sync, generator, text_queue, loop)
 
                 # generate
-                response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
+                async with lock:
+                    response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
                 result = parse_tool(response)
 
                 importance_counter += 1
@@ -432,16 +448,23 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                             "mashiro_function_calling": response,
                             "tool_result": tool_result
                         }
-                        response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
+                        async with lock:
+                            response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
                         
                 print("メッセージを生成したよ")
-                
-                # 全文からの一括感情解析はやめる
-                # clean_text, emotion = parse_emotion(response)
-
                 parsed_result = []
                 # response(タグ込み)を句読点で分割する
-                parsed_result = re.split('([、。？！…]|\.{3}|\.{6})', response)
+                # parsed_result = re.split('([、。？！…]|\.{3}|\.{6})', response)
+                # 句点で分割し、区切り文字を前のセグメントに結合する
+                # 例: "こんにちは。元気？" → ["こんにちは。", "元気？"]
+                raw_split = re.split('([。？！…])', response)
+                parsed_result = []
+                for i in range(0, len(raw_split), 2):
+                    chunk = raw_split[i]
+                    if i + 1 < len(raw_split):
+                        chunk += raw_split[i + 1]
+                    if chunk.strip():
+                        parsed_result.append(chunk)
                 
                 # Speaking状態を開始
                 await text_queue.put({"type": "state", "state": "speaking"})
@@ -481,38 +504,74 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
 async def message_send(text_queue: asyncio.Queue, websocket: WebSocket):
     global ai_state
     global godot_queue
+    spoken_chunks = []
     while True:
-        data = await text_queue.get()
+        # data = await text_queue.get()
+        get_task = asyncio.create_task(text_queue.get())
+        int_task = asyncio.create_task(interrupt_event.wait())
+
+        done, pending = await asyncio.wait(
+            [get_task, int_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
+
         try:
-            if data is None:
-                continue
-        
-            elif data["type"] == "state":
-                await websocket.send_text(create_state_message(data["state"]))
-                continue
-            
-            elif data["type"] == "text":
-                audio = await tts.synthesize(data["data"])
-                if audio is None:
-                    await websocket.send_text(create_error_message("fault synthesize"))
-                    continue
-                else:
-                    await websocket.send_bytes(audio)
-                    continue
-            
-            elif data["type"] == "emotion":
-                emotion = data["data"]
-                if emotion is None:
-                    await websocket.send_text(create_emotion_message("neutral"))
-                    continue 
-                else:
-                    await websocket.send_text(create_emotion_message(emotion))
-                    continue
-            
-            elif data["type"] == "done":
-                await websocket.send_text(create_done_message())
+            if int_task in done:
+                print("websocket interrupt detected")
                 ai_state = "idle"
-                continue
+                await websocket.send_text(create_state_message("idle"))
+                # llm_engine.generate内のadd_memoryで保存済み（二重保存防止）
+                # response = "".join(spoken_chunks)
+                # memory_store.short_term.append({"text": response, "role": "assistant_message", "user_name": "ましろ", "timestamp": time.time()})
+                while not text_queue.empty():
+                    text_queue.get_nowait()
+                interrupt_event.clear()
+                spoken_chunks = []
+            else:
+                data = get_task.result()
+                if data is None:
+                    continue
+            
+                elif data["type"] == "state":
+                    await websocket.send_text(create_state_message(data["state"]))
+                    continue
+                
+                elif data["type"] == "text":
+                    # audio = await tts.synthesize(data["data"])
+                    if tts.backend == 'voicevox':
+                        audio = await tts.synthesize(data["data"])
+                    elif tts.backend == 'qwen':
+                        audio = await asyncio.to_thread(tts.qwen_synthesize, data["data"])
+                    elif tts.backend == 'azure':
+                        audio = await asyncio.to_thread(tts.azure_synthesize, data["data"])
+
+                    if audio is None:
+                        await websocket.send_text(create_error_message("fault synthesize"))
+                        continue
+                    else:
+                        await websocket.send_bytes(audio)
+                        spoken_chunks.append(data["data"])
+                        continue
+                
+                elif data["type"] == "emotion":
+                    emotion = data["data"]
+                    if emotion is None:
+                        await websocket.send_text(create_emotion_message("neutral"))
+                        continue 
+                    else:
+                        await websocket.send_text(create_emotion_message(emotion))
+                        continue
+                
+                elif data["type"] == "done":
+                    await websocket.send_text(create_done_message())
+                    # llm_engine.generate内のadd_memoryで保存済み（二重保存防止）
+                    # response = "".join(spoken_chunks)
+                    # memory_store.short_term.append({"text": response, "role": "assistant_message", "user_name": "ましろ", "timestamp": time.time()})
+                    ai_state = "idle"
+                    spoken_chunks = []
+                    continue
         
         except Exception as e:
             print(f"audio_send error: {e}")
@@ -538,10 +597,10 @@ def producer_task_sync(generator, text_queue, loop):
                 if buffer:
                     if flag == 0:
                         loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "state", "state": "speaking"})
+                        flag += 1
                     loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "text", "data": buffer + token})
                     full_text += buffer + token
                     buffer = ''
-                    flag += 1
                 else:
                     print("buffer is empty")
                     continue
@@ -558,6 +617,9 @@ def producer_task_sync(generator, text_queue, loop):
                 
 
             else:
+                if flag == 0:
+                    loop.call_soon_threadsafe(text_queue.put_nowait, {"type": "state", "state": "speaking"})
+                    flag += 1
                 buffer += token
         except Exception as e:
             print(f"procuder_task error: {e}")

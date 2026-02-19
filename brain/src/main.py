@@ -14,7 +14,7 @@ import uvicorn
 import server.websocket as fastapi
 import websockets
 import struct
-from server.protocol import parse_client_message, create_state_message, create_text_message
+from server.protocol import parse_client_message, create_state_message, create_text_message, create_interrupt_message
 import json
 import re
 import numpy as np
@@ -53,12 +53,15 @@ class VolumeMonitor(discord.AudioSource):
         self.original = original
         self.godot_queue = godot_queue
         self.loop = loop
+        self.muted = False
 
     def read(self) -> bytes:
         data = self.original.read()
         if not data:
             return data
-        
+        if self.muted:
+            return b'\x00' * len(data)
+
         # RMS
         try:
             if self.godot_queue is not None:
@@ -74,7 +77,10 @@ class VolumeMonitor(discord.AudioSource):
         return data
     
     def cleanup(self) -> None:
-        return self.original.cleanup()
+        try:
+            return self.original.cleanup()
+        except Exception:
+            pass
 
 # ========== AudioSink ==========
 class MyAudioSink(voice_recv.AudioSink):
@@ -82,30 +88,30 @@ class MyAudioSink(voice_recv.AudioSink):
         print("MyAudioSink __init__ 開始")
         super().__init__()
         self.vad = VADEngine()
-
         self.ev_loop = bot.loop
-
         # ユーザーごとの音声バッファ
         self.user_data = {}
-
         # バックグラウンドタスク
         self.bg_task = self.ev_loop.create_task(self.check_silence_loop())
         self.queue_task = self.ev_loop.create_task(self.process_queue_loop())
-
         # 音声再生用
         self.vc = vc
-
         # Processing中フラグ
         self.is_processing = False
-
         # オーディオキュー
         self.audio_queue = asyncio.Queue()
-
         # websocket
         self.ws = ws
-
         # AIの状態
         self.ai_state = "idle" # idle / listening / speaking
+        # interrupt用のフラグ
+        self.interrupt_sent = False
+        
+        self.play_queue = asyncio.Queue()
+        self.should_cleanup = True
+        self.speaking_start_time: float
+        self.current_source: VolumeMonitor | None = None
+
 
         print("MyAudioSink __init__ 完了")
 
@@ -124,12 +130,14 @@ class MyAudioSink(voice_recv.AudioSink):
         while True:
             await asyncio.sleep(0.1)
 
+            """
             # Processing中はスキップ
             if self.is_processing or self.ai_state == "speaking":
                 for key in list(self.user_data.keys()):
                     self.user_data[key]["buffer"].clear()
                     self.user_data[key]["is_speaking"] = False
                 continue
+            """
 
             current_time = time.time()
             for user_key in list(self.user_data.keys()):
@@ -159,17 +167,25 @@ class MyAudioSink(voice_recv.AudioSink):
 
                         await self.audio_queue.put((user, user_key, full_audio_bytes))
 
+    def _do_interrupt(self):
+        """イベントループスレッドで実行される"""
+        if self.current_source:
+            self.current_source.muted = True
+        while not self.play_queue.empty():
+            self.play_queue.get_nowait()
+    
+    def wants_to_stop_without_cleanup(self):
+        self.should_cleanup = False
+
     def write(self, user, data) -> None:
         try:
-            if self.ai_state == "speaking":
-                return
             # ユーザーが特定できないパケットは無視
             if user is None or user.bot:
                 return
 
             # Processing中は新しい音声を受け付けない
-            if self.is_processing:
-                return
+            #if self.is_processing:
+            #    return
 
             # data.pcmは bytes型のPCMデータ
             if not hasattr(data, 'pcm'):
@@ -194,7 +210,7 @@ class MyAudioSink(voice_recv.AudioSink):
             self.user_data[user_key]["last_seen"] = current_time
             self.user_data[user_key]["user"] = user
 
-            CHUNK_LIMIT = 5
+            CHUNK_LIMIT = 10
 
             # データをバッファに溜める
             if self.user_data[user_key]["tick"] < CHUNK_LIMIT:
@@ -213,13 +229,24 @@ class MyAudioSink(voice_recv.AudioSink):
 
                 if vad_result:
                     if not self.user_data[user_key]["is_speaking"]:
+                        self.user_data[user_key]["speech_start_time"] = current_time
                         asyncio.run_coroutine_threadsafe(
                             self.ws.send(create_state_message("listening")),
                             self.ev_loop
                         )
                     self.user_data[user_key]["is_speaking"] = True
-                    
                     self.user_data[user_key]["buffer"].append(big_buffer)
+
+                    # 割り込み判定: VADが声を検知 かつ ましろが発話中
+                    if (self.ai_state == "speaking"
+                        and not self.interrupt_sent):
+                        self.interrupt_sent = True
+                        print("interrupt detected!")
+                        asyncio.run_coroutine_threadsafe(
+                            self.ws.send(create_interrupt_message()),
+                            loop=self.ev_loop
+                        )
+                        self.ev_loop.call_soon_threadsafe(self._do_interrupt)
 
                 elif self.user_data[user_key]["is_speaking"]:
                     # 発話中の無音区間もバッファに追加
@@ -243,7 +270,10 @@ class MyAudioSink(voice_recv.AudioSink):
             self.is_processing = False
 
     def cleanup(self):
-        print("切断されました")
+        if not self.should_cleanup:
+            return
+        else:
+            print("切断されました")
 
 async def receiver_task(ws, play_queue: asyncio.Queue, sink: MyAudioSink):
     while True:
@@ -255,12 +285,15 @@ async def receiver_task(ws, play_queue: asyncio.Queue, sink: MyAudioSink):
             else:
                 message = parse_client_message(data)
                 if message["type"] == "state":
+                    if message["payload"]["state"] == "speaking":
+                        sink.interrupt_sent = False
+                        sink.speaking_start_time = time.time()
                     sink.ai_state = message["payload"]["state"]
                     print(f"receive message: {message['payload']['state']}")
                     continue
                 
                 elif message["type"] == "done":
-                    sink.ai_state = "idle"
+                    await play_queue.put("done")
                     print("receiver_task done")
                     continue
 
@@ -283,19 +316,22 @@ async def player_task(audio_queue, vc, loop, sink: MyAudioSink):
         done_event.clear()
         try:
             audio_data = await audio_queue.get()
+            if audio_data == "done":
+                sink.ai_state = "idle"
+                continue
+
             if audio_data is None:
                 break
             
             audio_source = discord.FFmpegPCMAudio(io.BytesIO(audio_data), pipe=True, before_options="-loglevel error")
             audio_source_custom = VolumeMonitor(audio_source, fastapi.godot_queue, loop)
+            sink.current_source = audio_source_custom
             if fastapi.godot_queue:
                 await fastapi.godot_queue.put({"type": "state", "state": "speaking"})
-            sink.ai_state = "speaking"
             vc.play(audio_source_custom, after=after_callback)
             await done_event.wait()
             if fastapi.godot_queue:
                 await fastapi.godot_queue.put({"type": "state", "state": "idle"})
-            sink.ai_state = "idle"
             # print("再生終了")
         except Exception as e:
             print(f"player_taskで例外が発生しました: {e}")
@@ -375,7 +411,6 @@ async def on_message(message: discord.Message):
 async def join(ctx):
     global reconnect_enabled
     reconnect_enabled = True
-    play_queue = asyncio.Queue()
     uri = "ws://localhost:8000/ws/voice"
     ws = await websockets.connect(uri)
     channel = ctx.author.voice.channel
@@ -386,8 +421,8 @@ async def join(ctx):
         sink = MyAudioSink(vc, ws)
         vc.listen(sink)
         print("vc.listen 完了")
-        bot.loop.create_task(receiver_task(ws, play_queue, sink)) # BG
-        bot.loop.create_task(player_task(play_queue, vc, loop, sink)) #BG
+        bot.loop.create_task(receiver_task(ws, sink.play_queue, sink)) # BG
+        bot.loop.create_task(player_task(sink.play_queue, vc, loop, sink)) #BG
         return vc
 
     vc = await connect_and_listen()
