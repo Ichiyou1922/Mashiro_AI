@@ -12,13 +12,13 @@ from core.tts_engine import TTSEngine
 from core.vad_engine import VADEngine
 import struct
 from memory.memory_store import UserProfileStore, memory_store
-from utils.text_parser import parse_emotion
-from utils.tool_parser import parse_tool
 from utils.tools import execute, vision_tool
 from memory.reflection import ReflectionManager
 import re
 import time
 from collections import deque
+from typing import List
+import json
 
 
 app = FastAPI()
@@ -191,37 +191,74 @@ async def game_endpoint(websocket: WebSocket):
     except Exception as e:
         print(f"game_endpoint disconnected: {e}")
 
-async def _get_final_response(text: str, user_id: int, image_url: str | None = None) -> str:
+async def _get_final_response(text: str, user_id: int, image_url: str | None = None) -> List[dict]:
     global importance_counter
     loop = asyncio.get_event_loop()
+    pre_result_stripped = None # フラグ兼データ
     if image_url:
         vision_text = await loop.run_in_executor(None, vision_tool.analyze_image, image_url)
         text = f"{text} [画像の説明]: {vision_text}"
 
     print(f"{user_profile.get_name(user_id)}: {text}")
     async with lock:
-        response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
-    result = parse_tool(response)
+        result = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
+        if result == {}:
+            max_retry = 3
+            retry_count = 0
+            while result == {} and retry_count < max_retry:
+                print("再生成を試みます...")
+                result = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User")
+                retry_count += 1
+                if result != {}:
+                    print("再生成成功")
+                    break
 
     importance_counter += 1
     if importance_counter >= 20:
         asyncio.ensure_future(loop.run_in_executor(None, memory_store.evaluate_importance))
         importance_counter = 0
 
-    print(result)
-    if type(result) is dict:
-        if result["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
-            tool_result = execute(result["tool_name"], result["param"])
-            memory_store.short_term.append({"text": tool_result, "role": "tool_result", "user_name": "system", "timestamp": time.time()})
-            print(tool_result)
-            include_tool_text = {
-                "mashiro_function_calling": response,
-                "tool_result": tool_result
+    if result.get("function") and result["function"]["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
+        if result.get("text"):
+            pre_result_stripped = {
+                "text": result["text"],
+                "emotion": result.get("emotion", "neutral"),
+                "speaking_rate": result.get("speaking_rate", 1.0),
+                "function": None
             }
-            async with lock:
-                response = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
-
-    return response
+        tool_name = result["function"]["tool_name"]
+        param = result["function"].get("param", None)
+        tool_result = execute(tool_name, param)
+        memory_store.short_term.append({"text": tool_result, "role": "tool_result", "user_name": "system", "timestamp": time.time()})
+        print(tool_result)
+        context_for_2nd = {**result, "function": None}
+        include_tool_text = {
+            "mashiro_function_calling": json.dumps(context_for_2nd, ensure_ascii=False),
+            "tool_result": tool_result
+        }
+        async with lock:
+            result = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
+            if result == {}:
+                max_retry = 3
+                retry_count = 0
+                while result == {} and retry_count < max_retry:
+                    print("再生成を試みます...")
+                    result = await loop.run_in_executor(None, llm.generate, user_id, str(text), user_profile.get_name(user_id) or "User", False, include_tool_text)
+                    retry_count += 1
+                    if result != {}:
+                        print("再生成成功")
+                        break
+    if result == {}:
+        result = {
+            "text": "応答エラーが発生しました。原因を調査してください。",
+            "emotion": "neutral",
+            "speaking_rate": 1.0,
+            "think": "",
+            "function": None
+        }
+    if pre_result_stripped:
+        return [pre_result_stripped, result]
+    return [result]
 
 async def reflection_timer(websocket: WebSocket):
     loop = asyncio.get_event_loop()    
@@ -277,27 +314,53 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
                 loop = asyncio.get_event_loop()
                 implus = f"ユーザーからの返事がありません。{ignore_counter}回目です。今までの会話から何を話すべきか、それとも話さないべきなのかを考えてください。話すべきなら返答を、話さないなら「...」を出力してください。"
                 async with lock:
-                    response = await loop.run_in_executor(None, llm.generate_autonomous, implus, None)
-                result = parse_tool(response)
+                    result = await loop.run_in_executor(None, llm.generate_autonomous, implus, None)
+                    if result == {}:
+                        max_retry = 3
+                        retry_count = 0
+                        while result == {} and retry_count < max_retry:
+                            print("再生成を試みます...")
+                            result = await loop.run_in_executor(None, llm.generate_autonomous, implus, None)
+                            retry_count += 1
+                            if result != {}:
+                                print("再生成成功")
+                                break
 
                 importance_counter += 1
                 if importance_counter >= 20:
                     asyncio.ensure_future(loop.run_in_executor(None, memory_store.evaluate_importance))
                     importance_counter = 0
 
-                if type(result) is dict and result["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
-                    tool_result = execute(result["tool_name"], result["param"])
+                if result.get("function") and result["function"]["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
+                    tool_result = execute(result["function"]["tool_name"], result["function"]["param"])
                     print(f"Autonomous Tool Result: {tool_result}")
+                    context_for_2nd = {**result, "function": None}
                     include_tool_text = {
-                        "autonomous_function_calling": result,
+                        "mashiro_function_calling": json.dumps(context_for_2nd, ensure_ascii=False),
                         "tool_result": tool_result
                     }
                     async with lock:
-                        response = await loop.run_in_executor(None, llm.generate_autonomous, implus, include_tool_text)
-                else:
-                    clean_text, emotion = parse_emotion(response)
+                        result = await loop.run_in_executor(None, llm.generate_autonomous, implus, include_tool_text)
+                        if result == {}:
+                            max_retry = 3
+                            retry_count = 0
+                            while result == {} and retry_count < max_retry:
+                                print("再生成を試みます...")
+                                result = await loop.run_in_executor(None, llm.generate_autonomous, implus, include_tool_text)
+                                retry_count += 1
+                                if result != {}:
+                                    print("再生成成功")
+                                    break
+                if result == {}:
+                    result = {
+                        "text": "応答エラーが発生しました。原因を調査してください。",
+                        "emotion": "neutral",
+                        "speaking_rate": 1.0,
+                        "think": "",
+                        "function": None
+                    }
 
-                if clean_text.startswith("..."):
+                if result["text"].startswith("..."):
                     print("ましろは喋らない選択をしました。")
                     await websocket.send_text(create_state_message("idle"))
                     ai_state = "idle"
@@ -309,17 +372,17 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
                 ai_state = "speaking"
 
                 # もはやtext_queueにemotionは必要無いかも
-                await text_queue.put({"type": "emotion", "data": emotion})
+                await text_queue.put({"type": "emotion", "data": result["emotion"]})
                 if godot_queue is not None:
-                    await godot_queue.put({"type": "emotion", "data": emotion})
-                print(f"ましろemotion: {emotion}")
-                print(f"ましろtext: {clean_text}")
+                    await godot_queue.put({"type": "emotion", "data": result["emotion"]})
+                print(f"ましろemotion: {result['emotion']}")
+                print(f"ましろtext: {result['text']}")
                 print("Discordに流したよ")
 
-                parsed_result = re.split(r'([、。？！…]|\.{3}|\.{6})', clean_text)
+                parsed_result = re.split(r'([、。？！…]|\.{3}|\.{6})', result["text"])
                 for text in parsed_result:
                     if text.strip():
-                        await text_queue.put({"type": "text", "data": text})
+                        await text_queue.put({"type": "text", "data": text, "speaking_rate": result["speaking_rate"]})
                         if godot_queue is not None:
                             await godot_queue.put({"type": "text", "data": text})
 
@@ -345,15 +408,21 @@ async def text_receiver(websocket: WebSocket):
                     image_url = msg["payload"].get("image_url")
                     print("textを受信したよ")
 
-                    response = await _get_final_response(text, user_id, image_url)
-                        
-                    print("メッセージを生成したよ")
-                    clean_text, emotion = parse_emotion(response)
-                    print(f"ましろemotion: {emotion}")
-                    print(f"ましろtext: {clean_text}")
-                    await websocket.send_text(create_emotion_message(emotion))
-                    await websocket.send_text(create_text_response_message(clean_text))
-                    print("Discordに流したよ")
+                    results = await _get_final_response(text, user_id, image_url)
+                    for result in results:
+                        if result.get("text") is None:
+                            result["text"] = "応答エラーが発生しました。原因を調査してください。"
+                        if result.get("emotion") is None:
+                            result["emotion"] = "neutral"
+                        if result.get("speaking_rate") is None:
+                            result["speaking_rate"] = 1.0
+
+                        print("メッセージを生成したよ")
+                        print(f"ましろemotion: {result['emotion']}")
+                        print(f"ましろtext: {result['text']}")
+                        await websocket.send_text(create_emotion_message(result["emotion"]))
+                        await websocket.send_text(create_text_response_message(result["text"]))
+                        print("Discordに流したよ")
     except Exception as e:
         print(f"text_receiver error: {e}")
                 
@@ -446,50 +515,43 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                 print(f"{user_id}: {text}")
                 await websocket.send_text(create_subtitle_message(f"{user_id}: {text}", True))
                 
-                response = await _get_final_response(text, user_id)
-                        
-                print("メッセージを生成したよ")
-                # 句点で分割し、区切り文字を前のセグメントに結合する
-                # 例: "こんにちは。元気？" → ["こんにちは。", "元気？"]
-                raw_split = re.split(r'([。？！…])', response)
-                parsed_result = []
-                for i in range(0, len(raw_split), 2):
-                    chunk = raw_split[i]
-                    if i + 1 < len(raw_split):
-                        chunk += raw_split[i + 1]
-                    if chunk.strip():
-                        parsed_result.append(chunk)
-                
-                # Speaking状態を開始
-                await text_queue.put({"type": "state", "state": "speaking"})
-                ai_state = "speaking"
+                results = await _get_final_response(text, user_id)
 
-                # 最終的な感情を保持する変数
-                final_emotion = "neutral"
+                for result in results:
+                    if result.get("text") is None:
+                        result["text"] = "応答エラーが発生しました。原因を調査してください。"
+                    if result.get("emotion") is None:
+                        result["emotion"] = "neutral"
+                    if result.get("speaking_rate") is None:
+                        result["speaking_rate"] = 1.0
+                            
+                    print("メッセージを生成したよ")
+                    # 句点で分割し、区切り文字を前のセグメントに結合する
+                    # 例: "こんにちは。元気？" → ["こんにちは。", "元気？"]
+                    raw_split = re.split(r'([。？！…])', result["text"])
+                    parsed_result = []
+                    for i in range(0, len(raw_split), 2):
+                        chunk = raw_split[i]
+                        if i + 1 < len(raw_split):
+                            chunk += raw_split[i + 1]
+                        if chunk.strip():
+                            parsed_result.append(chunk)
+                    
+                    # Speaking状態を開始
+                    await text_queue.put({"type": "state", "state": "speaking"})
+                    ai_state = "speaking"
 
-                # 分割ループ
-                current_chunk = ""
-                for segment in parsed_result:
-                    if not segment: continue
-                    
-                    # 感情解析
-                    chunk_text, chunk_emotion = parse_emotion(segment)
-                    
-                    # 感情が見つかれば更新（送信はしない）
-                    if chunk_emotion != "neutral":
-                        final_emotion = chunk_emotion
-                    
-                    if chunk_text.strip():
-                        await text_queue.put({"type": "text", "data": chunk_text})
-
-                # 発話の後に一回だけ感情を送る
-                if final_emotion != "neutral":
-                    await text_queue.put({"type": "emotion", "data": final_emotion})
+                    await text_queue.put({"type": "emotion", "data": result["emotion"]})
                     if godot_queue is not None:
-                        await godot_queue.put({"type": "emotion", "data": final_emotion})
-                        
-                await text_queue.put({"type": "done"})
-                continue
+                        await godot_queue.put({"type": "emotion", "data": result["emotion"]})
+                    for text in parsed_result:
+                        if text.strip():
+                            await text_queue.put({"type": "text", "data": text, "speaking_rate": result["speaking_rate"]})
+                            if godot_queue is not None:
+                                await godot_queue.put({"type": "text", "data": text})
+                            
+                    await text_queue.put({"type": "done"})
+                    continue
 
     except Exception as e:
         print(f"processor error: {e}")
@@ -544,7 +606,7 @@ async def message_send(text_queue: asyncio.Queue, websocket: WebSocket):
                 elif data["type"] == "text":
                     # audio = await tts.synthesize(data["data"])
                     if tts.backend == 'voicevox':
-                        audio = await tts.synthesize(data["data"])
+                        audio = await tts.synthesize(data["data"], speaking_rate=float(data.get("speaking_rate", 1.0)))
                     elif tts.backend == 'qwen':
                         audio = await asyncio.to_thread(tts.qwen_synthesize, data["data"])
                     elif tts.backend == 'azure':

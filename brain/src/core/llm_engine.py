@@ -17,7 +17,7 @@ CONFIG_PATH = ROOT_DIR / "config"
 
 load_dotenv()
 
-config_name = "mashiro_config_v3.json"
+config_name = "mashiro_config_v4.json"
 model_name = "mashiro_v10.gguf"
 MASHIRO_ID = int(os.getenv("MASHIRO_ID", "0"))
 
@@ -96,6 +96,7 @@ class LLMEngine:
             ]
         ))
         answer_text: str = response['choices'][0]['message']['content'] or ""
+        print(f"[Debug LLM raw] '{answer_text}'")
         return answer_text
 
     def _clean_response(self, text: str) -> str:
@@ -112,7 +113,7 @@ class LLMEngine:
             return text.strip()
 
     def generate(self, user_id: int, user_text: str, user_name: str="User", 
-             save_user: bool=True, tool_context=None) -> str:
+             save_user: bool=True, tool_context=None) -> dict:
 
         print("Thinking...")
         saved_name = self.user_profile_store.get_name(user_id=user_id)
@@ -126,23 +127,6 @@ class LLMEngine:
             else:
                 print("[generate] timestampの取得に失敗しました。")
 
-        # memories = memory_store.search_with_score(user_text, limit=3)
-
-        """
-        if memories:
-            timestamps = [memory["timestamp"] for memory in memories]
-            memory_store.mark_accessed(timestamps)
-            sorted_memories = sorted(memories, key=lambda m: m["timestamp"])
-            memory_lines = []
-            for m in sorted_memories:
-                if m["role"] == "user_message":
-                    memory_lines.append(f"{m['user_name']}: {m['text']}")
-                elif m["role"] == "assistant_message":
-                    memory_lines.append(f"{m['user_name']}: {m['text']}")
-            memory_content = "\n".join(memory_lines)
-        else:
-            memory_content = "なし"
-        """
         reflections = memory_store.get_reflection(limit=3)
         if reflections:
             reflection_text = "\n".join([f"- {r['text']}" for r in reflections])
@@ -188,7 +172,14 @@ class LLMEngine:
         else:
             messages = system_messages + scored_memory_lines + memory_lines + [{"role": "user", "content": f"{self.user_profile_store.get_name(user_id)}の発言" + user_text}]
         
-        answer_text = self._call_llm(messages=messages)
+        answer_text = self._call_llm(messages=messages, response_format={"type": "json_object"})
+        
+        try:
+            result = json.loads(answer_text)
+            result["text"] = self._clean_response(result.get("text", ""))
+        except json.JSONDecodeError:
+            print(f"JSONデコードエラー: {answer_text}")
+            result = {}
 
         if save_user:
             memory_store.add_memory(
@@ -200,18 +191,16 @@ class LLMEngine:
 
         # print(f"[Debug] ましろ生: {answer_text}")
         # 特殊トークンの除去
-        if '<function=' not in answer_text:
-            answer_text = self._clean_response(answer_text)
-            # adjust_importanceのためにtimestampを保持
+        if result and result.get("text"):
             self.last_assistant_timestamp = memory_store.add_memory(
-                text=answer_text,
+                text=result["text"],
                 user_id=MASHIRO_ID,
                 user_name="ましろ",
                 role="assistant_message"
             )
-        return answer_text
+        return result
     
-    def generate_autonomous(self, impulse_text: str, tool_context: None):
+    def generate_autonomous(self, impulse_text: str, tool_context: None) -> dict:
         """自己発話を生成する"""
         internal_signal = f"""
 [内部シグナル] 
@@ -265,21 +254,24 @@ class LLMEngine:
             messages = system_messages + scored_memory_lines + memory_lines + [{"role": "user", "content": internal_signal}]
             # print(messages)
 
-        answer_text = self._call_llm(messages=messages)
+        answer_text = self._call_llm(messages=messages, response_format={"type": "json_object"})
 
+        try:
+            result = json.loads(answer_text)
+            result["text"] = self._clean_response(result.get("text", ""))
+        except json.JSONDecodeError:
+            print(f"JSONデコードエラー: {answer_text}")
+            result = {}
         # print(f"[Debug] ましろ生: {answer_text}")
         # 特殊トークンの除去
-        if '<function=' not in answer_text:
-            answer_text = self._clean_response(answer_text)
-            # adjust_importanceのためにtimestampを保持
-            if not answer_text.startswith("..."):
+        if result and result.get("text") and not result["text"].startswith("..."):
                 self.last_assistant_timestamp = memory_store.add_memory(
-                    text=answer_text,
+                    text=result["text"],
                     user_id=MASHIRO_ID,
                     user_name="ましろ",
                     role="assistant_message"
                 )
-        return answer_text
+        return result
     
     def generate_game_action(
             self, 
@@ -322,7 +314,7 @@ class LLMEngine:
         personality_text = "\n".join(config["personality"])
         autonomy_text = "\n".join(config["autonomy"])
         speech_style_text = "\n".join(config["speech_style"])
-        constraints_text = "\n".join(config["constraints"])
+        # constraints_text = "\n".join(config["constraints"])
         tool_text = "\n".join(config["tools"])
 
         prompt = f"""
@@ -340,10 +332,29 @@ Name: {config['name']}
 ## Speech Style
 {speech_style_text}
 
-## Constraints
-{constraints_text}
-
 ## Tools
 {tool_text}
+
+## JSON Format
+- text: ユーザーへの返答を書いてください。
+- emotion: 返答の感情を以下の中から選んでください。neutral|happy|sad|angry|surprised|shy|sleepy|bored|question|wink
+- speaking_rate: 話すスピードを指定してください。1.0が通常、0.8（ゆっくり）から1.5（速い）の範囲でfloatで指定してください。
+- function: ツール呼び出しがある場合は、ツール名とパラメータをJSON形式で書いてください。ツールを使わない場合は "function": null です。
+以下の例を参考にしてください。キーはいかなる場合においても必ずすべて出力してください。
+例（ツール呼び出しなし）:
+{{
+    "text": "response here",
+    "emotion": "neutral",
+    "speaking_rate": 1.0,
+    "function": null
+}}
+例（ツール呼び出しあり）:
+{{
+    "text": "ちょっと調べてみるね",
+    "emotion": "neutral",
+    "speaking_rate": 1.0,
+    "function": {{"tool_name": "search_tool", "param": "検索したい内容"}}
+}}
 """
         return prompt.strip()
+

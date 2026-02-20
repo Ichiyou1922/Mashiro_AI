@@ -26,7 +26,7 @@ class TTSEngine:
         if backend == "voicevox":
             self.base_url = f"http://{host}:{port}"
             self.speaker_id = speaker_id
-            self.speedScale = 1.3
+            self.speedScale = 1.0
             self.pitchScale = 0.0
             self.volumeScale = 1.0
             self.intonationScale = 1.0
@@ -114,7 +114,7 @@ class TTSEngine:
             else:
                 raise Exception("Speech synthesis failed: {}".format(result.reason))
 
-    async def synthesize(self, text: str) -> bytes | None:
+    async def synthesize(self, text: str, speaking_rate: float) -> bytes | None:
         """VoiceVoxを用いた音声合成"""
         if not text:
             return None
@@ -134,7 +134,7 @@ class TTSEngine:
                     print(f"Voicevox Error (Query): {await r.text()}")
                     return None
                 query_data = await r.json()
-                query_data["speedScale"] = self.speedScale
+                query_data["speedScale"] = speaking_rate
                 query_data["pitchScale"] = self.pitchScale
                 query_data["volumeScale"] = self.volumeScale
                 query_data["intonationScale"] = self.intonationScale
@@ -144,7 +144,7 @@ class TTSEngine:
                 r = await session.post(
                     f"{self.base_url}/synthesis",
                     params=synthesis_payload,
-                    json=query_data
+                    json=query_data,
                 )
                 if r.status != 200:
                     print(f"Voicevox Error (Synthesis): {await r.text()}")

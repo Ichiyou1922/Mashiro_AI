@@ -38,7 +38,7 @@ fi
 
 # --- ましろ本体 起動 ---
 echo "Starting Mashiro..."
-tmux new-session -d -s "$TMUX_SESSION" "cd '$SCRIPT_DIR' && source brain/.venv/bin/activate && python brain/src/main.py 2>&1"
+tmux new-session -d -s "$TMUX_SESSION" "cd '$SCRIPT_DIR' && source brain/.venv/bin/activate && python -u brain/src/main.py 2>&1 | tee mashiro.log"
 
 
 echo ""
@@ -47,3 +47,4 @@ echo "VOICEVOX: $1 mode (container: $VOICEVOX_CONTAINER)"
 echo "Mashiro:  tmux session '$TMUX_SESSION'"
 echo ""
 echo "Log: tmux attach -t $TMUX_SESSION  (detach: Ctrl+B, D)"
+echo ""
