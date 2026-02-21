@@ -3,7 +3,7 @@ import sys
 # パス解決のおまじない
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI, WebSocket
-from .protocol import create_state_message,create_subtitle_message, parse_client_message, create_error_message, create_done_message, create_text_response_message, create_emotion_message, create_autonomous_message, create_volume_message, create_action_message
+from .protocol import create_state_message,create_subtitle_message, parse_client_message, create_error_message, create_done_message, create_text_response_message, create_emotion_message, create_autonomous_message, create_volume_message, create_action_message, create_finish_message
 import websockets
 import asyncio
 from core.llm_engine import LLMEngine
@@ -17,7 +17,7 @@ from memory.reflection import ReflectionManager
 import re
 import time
 from collections import deque
-from typing import List
+from typing import List, AsyncGenerator
 import json
 
 
@@ -168,7 +168,7 @@ async def game_endpoint(websocket: WebSocket):
                                 await voice_text_queue.put({"type": "state", "state": "speaking"})
                                 await voice_text_queue.put({"type": "text", "data": text})
                                 await voice_text_queue.put({"type": "done"})
-                            # memory_store.short_term.append({"role": "assistant_message", "text": text, "user_name": "ましろ", "timestamp": time.time(), "importance": 0})
+                            memory_store.short_term.append({"role": "assistant_message", "text": text, "user_name": "ましろ", "timestamp": time.time(), "importance": 0})
                             action = result["action"]
                             game_memory.append({"role": "assistant", "content": text + action})
                             await websocket.send_text(create_action_message(action))
@@ -179,7 +179,7 @@ async def game_endpoint(websocket: WebSocket):
                                 await voice_text_queue.put({"type": "state", "state": "speaking"})
                                 await voice_text_queue.put({"type": "text", "data": text})
                                 await voice_text_queue.put({"type": "done"})
-                            # memory_store.short_term.append({"role": "assistant_message", "text": text, "user_name": "ましろ", "timestamp": time.time(), "importance": 0})
+                            memory_store.short_term.append({"role": "assistant_message", "text": text, "user_name": "ましろ", "timestamp": time.time(), "importance": 0})
                             game_memory.append({"role": "assistant", "content": text})
                             
                     else:
@@ -191,10 +191,9 @@ async def game_endpoint(websocket: WebSocket):
     except Exception as e:
         print(f"game_endpoint disconnected: {e}")
 
-async def _get_final_response(text: str, user_id: int, image_url: str | None = None) -> List[dict]:
+async def _get_final_response(text: str, user_id: int, image_url: str | None = None) -> AsyncGenerator[dict, None]:
     global importance_counter
     loop = asyncio.get_event_loop()
-    pre_result_stripped = None # フラグ兼データ
     if image_url:
         vision_text = await loop.run_in_executor(None, vision_tool.analyze_image, image_url)
         text = f"{text} [画像の説明]: {vision_text}"
@@ -219,21 +218,22 @@ async def _get_final_response(text: str, user_id: int, image_url: str | None = N
         importance_counter = 0
 
     if result.get("function") and result["function"]["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
-        if result.get("text"):
-            pre_result_stripped = {
-                "text": result["text"],
-                "emotion": result.get("emotion", "neutral"),
-                "speaking_rate": result.get("speaking_rate", 1.0),
-                "function": None
-            }
+        if result.get("text") is None or result["text"].strip() == "":
+             result["text"] = f"{result['function']['tool_name']}実行中..."
+ 
+        yield {
+            "text": result["text"],
+            "emotion": result.get("emotion", "neutral"),
+            "speaking_rate": result.get("speaking_rate", 1.0),
+            "function": None
+        }
         tool_name = result["function"]["tool_name"]
         param = result["function"].get("param", None)
         tool_result = execute(tool_name, param)
         memory_store.short_term.append({"text": tool_result, "role": "tool_result", "user_name": "system", "timestamp": time.time()})
         print(tool_result)
-        context_for_2nd = {**result, "function": None}
         include_tool_text = {
-            "mashiro_function_calling": json.dumps(context_for_2nd, ensure_ascii=False),
+            "mashiro_function_calling": json.dumps(result, ensure_ascii=False),
             "tool_result": tool_result
         }
         async with lock:
@@ -248,7 +248,7 @@ async def _get_final_response(text: str, user_id: int, image_url: str | None = N
                     if result != {}:
                         print("再生成成功")
                         break
-    if result == {}:
+    if result == {} or result.get("text") is None or result["text"].strip() == "":
         result = {
             "text": "応答エラーが発生しました。原因を調査してください。",
             "emotion": "neutral",
@@ -256,9 +256,8 @@ async def _get_final_response(text: str, user_id: int, image_url: str | None = N
             "think": "",
             "function": None
         }
-    if pre_result_stripped:
-        return [pre_result_stripped, result]
-    return [result]
+    
+    yield result
 
 async def reflection_timer(websocket: WebSocket):
     loop = asyncio.get_event_loop()    
@@ -332,7 +331,32 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
                     importance_counter = 0
 
                 if result.get("function") and result["function"]["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
-                    tool_result = execute(result["function"]["tool_name"], result["function"]["param"])
+                    tool_name = result["function"]["tool_name"]
+                    param = result["function"].get("param", None)
+                    if result.get("text") is None or result["text"].strip() == "":
+                        result["text"] = f"{result['function']['tool_name']}実行中..."
+                    result = {
+                        "text": result["text"],
+                        "emotion": result.get("emotion", "neutral"),
+                        "speaking_rate": result.get("speaking_rate", 1.0),
+                        "function": None
+                    }
+                    await text_queue.put({"type": "state", "state": "speaking"})
+                    ai_state = "speaking"
+                    await text_queue.put({"type": "emotion", "data": result["emotion"]})
+                    if godot_queue is not None:
+                        await godot_queue.put({"type": "emotion", "data": result["emotion"]})
+                    print(f"ましろemotion: {result['emotion']}")
+                    print(f"ましろtext: {result['text']}")
+                    print("Discordに流したよ")
+                    parsed_result = re.split(r'([、。？！…]|\.{3}|\.{6})', result["text"])
+                    for text in parsed_result:
+                        if text.strip():
+                            await text_queue.put({"type": "text", "data": text, "speaking_rate": result["speaking_rate"]})
+                            if godot_queue is not None:
+                                await godot_queue.put({"type": "text", "data": text})
+                    await text_queue.put({"type": "done"})
+                    tool_result = execute(tool_name, param)
                     print(f"Autonomous Tool Result: {tool_result}")
                     context_for_2nd = {**result, "function": None}
                     include_tool_text = {
@@ -351,7 +375,7 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
                                 if result != {}:
                                     print("再生成成功")
                                     break
-                if result == {}:
+                if result == {} or result.get("text") is None or result["text"].strip() == "":
                     result = {
                         "text": "応答エラーが発生しました。原因を調査してください。",
                         "emotion": "neutral",
@@ -408,9 +432,8 @@ async def text_receiver(websocket: WebSocket):
                     image_url = msg["payload"].get("image_url")
                     print("textを受信したよ")
 
-                    results = await _get_final_response(text, user_id, image_url)
-                    for result in results:
-                        if result.get("text") is None:
+                    async for result in _get_final_response(text, user_id, image_url):
+                        if result.get("text") is None or result["text"].strip() == "":
                             result["text"] = "応答エラーが発生しました。原因を調査してください。"
                         if result.get("emotion") is None:
                             result["emotion"] = "neutral"
@@ -423,6 +446,7 @@ async def text_receiver(websocket: WebSocket):
                         await websocket.send_text(create_emotion_message(result["emotion"]))
                         await websocket.send_text(create_text_response_message(result["text"]))
                         print("Discordに流したよ")
+                    await websocket.send_text(create_finish_message())
     except Exception as e:
         print(f"text_receiver error: {e}")
                 
@@ -514,11 +538,9 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
 
                 print(f"{user_id}: {text}")
                 await websocket.send_text(create_subtitle_message(f"{user_id}: {text}", True))
-                
-                results = await _get_final_response(text, user_id)
 
-                for result in results:
-                    if result.get("text") is None:
+                async for result in _get_final_response(text, user_id):
+                    if result.get("text") is None or result["text"].strip() == "":
                         result["text"] = "応答エラーが発生しました。原因を調査してください。"
                     if result.get("emotion") is None:
                         result["emotion"] = "neutral"

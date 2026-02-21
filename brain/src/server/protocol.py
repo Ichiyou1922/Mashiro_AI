@@ -22,7 +22,8 @@ ServerMessageType = Literal[
     "error", 
     "text_response", 
     "emotion", 
-    "volume"
+    "volume",
+    "finish"
     ]
 
 # AI状態
@@ -165,4 +166,10 @@ def create_interrupt_message():
     """音声再生中の割り込みメッセージを作成"""
     return json.dumps({
         "type": "interrupt"
+    })
+
+def create_finish_message():
+    """すべてのメッセージの送信の終了を知らせる"""
+    return json.dumps({
+        "type": "finish"
     })

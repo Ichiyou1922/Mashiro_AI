@@ -147,7 +147,7 @@ class LLMEngine:
                 elif sm["role"] == "assistant_message":
                     memory_lines.append({"role": "assistant", "content": f"{sm['text']}"})
                 elif sm["role"] == "tool_result":
-                    memory_lines.append({"role": "ipython", "content": f"{sm['text']}"})
+                    memory_lines.append({"role": "user", "content": f"[ツール実行結果]: {sm['text']}"})
         
         reversed_memory_lines = memory_lines[-3:]
         query_line = ''
@@ -167,7 +167,7 @@ class LLMEngine:
         print("===memory===")
         print(memory_lines)
         if tool_context is not None:
-            messages = system_messages + scored_memory_lines + memory_lines + [{"role": "assistant", "content": tool_context["mashiro_function_calling"]}] + [{"role": "ipython", "content": tool_context["tool_result"]}]
+            messages = system_messages + scored_memory_lines + memory_lines + [{"role": "assistant", "content": tool_context["mashiro_function_calling"]}] + [{"role": "user", "content": f"[ツール実行結果]: {tool_context['tool_result']}\n\nuserに結果を教えてあげてください。"}]
             # print(messages)
         else:
             messages = system_messages + scored_memory_lines + memory_lines + [{"role": "user", "content": f"{self.user_profile_store.get_name(user_id)}の発言" + user_text}]

@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
-tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
 
 '''
 def search_something(query: str) -> str:
@@ -40,6 +39,7 @@ def search_something(query: str) -> str:
 '''
 
 def search_something(query: str) -> str:
+    tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
     response = tavily_client.search(
         query=f"{query}について日本語で詳細に要約し、回答してください。",
         search_depth="basic",
@@ -50,7 +50,3 @@ def search_something(query: str) -> str:
         return response["answer"]
     else:
         return "検索結果の取得に失敗しました。"
-
-
-result = search_something("Python 辞書 リスト 変換")
-print(result)

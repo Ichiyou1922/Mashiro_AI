@@ -121,6 +121,9 @@ async def text_ws_receiver(ws):
             print(f"text_ws_receiver emotion: {message['payload']['emotion']}")
         elif message["type"] == "error":
             print(f"text_ws_receiver error: {message['payload']['message']}")
+        elif message["type"] == "finish":
+            text_response_queue.put_nowait(None)
+            print("text_ws_receiver finish received")
         else:
             print(f"receive unknown message: message type is {message['type']}")
 
@@ -155,20 +158,23 @@ async def on_message(message: discord.Message):
             message.content,
             image_url
         ))
-        reply = await text_response_queue.get()
-        print("websocketにメッセージを送信")
+        while True:
+            reply = await text_response_queue.get()
+            if reply is None:
+                break
+            print("websocketにメッセージを送信")
 
-    if reply:
-        reply = remove_thoughts(reply)
+            if reply:
+                reply = remove_thoughts(reply)
 
-    try:
-        if not reply:
-            print("Empty reply generated. Skipping.")
-            return 
-    except Exception as e:
-        print(f"on_message error: {e}")
-    
-    await message.reply(reply)
+            try:
+                if not reply:
+                    print("Empty reply generated. Skipping.")
+                    continue
+            except Exception as e:
+                print(f"on_message error: {e}")
+                
+            await message.reply(reply)
 
 # ========== Bot Commands ==========
 @bot.command()
