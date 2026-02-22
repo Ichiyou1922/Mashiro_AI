@@ -22,33 +22,22 @@ import json
 
 
 app = FastAPI()
-
 stt = STTEngine(model="groq")
 llm = LLMEngine()
 # 'voicevox' or 'qwen' or 'azure'
 tts = TTSEngine(backend='voicevox')
-
 vad = VADEngine()
-
 user_profile = UserProfileStore()
-
 reflection = ReflectionManager()
-
 importance_counter = 0
-
 last_interaction_time = 0.0
-
 ignore_counter = 0
-
 ai_state = "idle"
-
 godot_queue: asyncio.Queue | None = None
-
 voice_text_queue: asyncio.Queue | None = None
-
 interrupt_event: asyncio.Event | None = None
-
 lock = asyncio.Lock()
+discord_command_queue: asyncio.Queue | None = None
 
 @app.websocket("/ws/voice")
 async def voice_endpoint(websocket: WebSocket):
@@ -217,7 +206,10 @@ async def _get_final_response(text: str, user_id: int, image_url: str | None = N
         asyncio.ensure_future(loop.run_in_executor(None, memory_store.evaluate_importance))
         importance_counter = 0
 
-    if result.get("function") and result["function"]["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
+    if result.get("function") and result["function"]["tool_name"] in [
+        "time_tool", "date_tool", "search_tool",
+        "send_discord_message", "join_voice", "leave_voice"
+        ]:
         if result.get("text") is None or result["text"].strip() == "":
              result["text"] = f"{result['function']['tool_name']}実行中..."
  
@@ -287,7 +279,7 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
     global godot_queue
     global importance_counter
 
-    boredom_threshold = 30.0
+    boredom_threshold = 10.0
     check_interval = 1.0
 
     print("Autonomy Loop Started.")
@@ -297,11 +289,11 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
             await asyncio.sleep(check_interval)
 
             current_time = time.time()
-            silence_dulation = current_time - last_interaction_time
+            silence_duration = current_time - last_interaction_time
 
-            if silence_dulation > boredom_threshold:
+            if silence_duration > boredom_threshold:
                 ignore_counter += 1
-                print(f"Autonomy Triggered: Silence for {silence_dulation:.1f}s")
+                print(f"Autonomy Triggered: Silence for {silence_duration:.1f}s")
 
                 last_interaction_time = time.time()
 
@@ -311,7 +303,7 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
                     await godot_queue.put({"type": "state", "state": "thinking"})
 
                 loop = asyncio.get_event_loop()
-                implus = f"ユーザーからの返事がありません。{ignore_counter}回目です。今までの会話から何を話すべきか、それとも話さないべきなのかを考えてください。話すべきなら返答を、話さないなら「...」を出力してください。"
+                implus = f"ユーザーからの返事がありません。{silence_duration:.0f}秒間沈黙が続いています（自発的な試み{ignore_counter}回目）。直近の会話を読み返し補足や配慮が必要なら話してください。ツールを使うこともできます。話すべきなら返答を、話さないなら「...」を出力してください。"
                 async with lock:
                     result = await loop.run_in_executor(None, llm.generate_autonomous, implus, None)
                     if result == {}:
@@ -330,7 +322,10 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
                     asyncio.ensure_future(loop.run_in_executor(None, memory_store.evaluate_importance))
                     importance_counter = 0
 
-                if result.get("function") and result["function"]["tool_name"] in ["time_tool", "date_tool", "search_tool"]:
+                if result.get("function") and result["function"]["tool_name"] in [
+                    "time_tool", "date_tool", "search_tool",
+                    "send_discord_message", "join_voice", "leave_voice"
+                    ]:
                     tool_name = result["function"]["tool_name"]
                     param = result["function"].get("param", None)
                     if result.get("text") is None or result["text"].strip() == "":
@@ -384,8 +379,8 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
                         "function": None
                     }
 
-                if result["text"].startswith("..."):
-                    print("ましろは喋らない選択をしました。")
+                if result["text"].startswith("...") or result["text"].startswith("…"):
+                    # print("ましろは喋らない選択をしました。")
                     await websocket.send_text(create_state_message("idle"))
                     ai_state = "idle"
                     if godot_queue is not None:
@@ -536,7 +531,6 @@ async def processor(audio_queue: asyncio.Queue, websocket: WebSocket, text_queue
                         await godot_queue.put({"type": "state", "state": "idle"})
                     continue 
 
-                print(f"{user_id}: {text}")
                 await websocket.send_text(create_subtitle_message(f"{user_id}: {text}", True))
 
                 async for result in _get_final_response(text, user_id):

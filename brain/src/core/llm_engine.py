@@ -112,8 +112,8 @@ class LLMEngine:
         else:
             return text.strip()
 
-    def generate(self, user_id: int, user_text: str, user_name: str="User", 
-             save_user: bool=True, tool_context=None) -> dict:
+    def generate(self, user_id: int, user_text: str, user_name: str="User",
+             save_user: bool=True, tool_context: dict | None = None) -> dict:
 
         print("Thinking...")
         saved_name = self.user_profile_store.get_name(user_id=user_id)
@@ -127,7 +127,7 @@ class LLMEngine:
             else:
                 print("[generate] timestampの取得に失敗しました。")
 
-        reflections = memory_store.get_reflection(limit=3)
+        reflections = memory_store.get_reflection(limit=5)
         if reflections:
             reflection_text = "\n".join([f"- {r['text']}" for r in reflections])
             print("===reflection===")
@@ -159,9 +159,9 @@ class LLMEngine:
         if scored_memory:
             for sm in scored_memory:
                 if sm["role"] == "user_message":
-                    scored_memory_lines.append({"role": "user", "content": f"{sm['user_name']}: {sm['text']}"})
+                    scored_memory_lines.append({"role": "user", "content": f"[関連する過去の記憶]: {sm['user_name']}: {sm['text']}"})
                 elif sm["role"] == "assistant_message":
-                    scored_memory_lines.append({"role": "assistant", "content": f"{sm['text']}"})
+                    scored_memory_lines.append({"role": "assistant", "content": f"[関連する過去の記憶]: {sm['text']}"})
         print("===scored memory===")
         print(scored_memory_lines)
         print("===memory===")
@@ -200,7 +200,7 @@ class LLMEngine:
             )
         return result
     
-    def generate_autonomous(self, impulse_text: str, tool_context: None) -> dict:
+    def generate_autonomous(self, impulse_text: str, tool_context: dict | None = None) -> dict:
         """自己発話を生成する"""
         internal_signal = f"""
 [内部シグナル] 
@@ -239,10 +239,10 @@ class LLMEngine:
         if scored_memory:
             for sm in scored_memory:
                 if sm["role"] == "user_message":
-                    scored_memory_lines.append({"role": "user", "content": f"{sm['user_name']}: {sm['text']}"})
+                    scored_memory_lines.append({"role": "user", "content": f"[関連する過去の記憶]: {sm['user_name']}: {sm['text']}"})
                 elif sm["role"] == "assistant_message":
-                    scored_memory_lines.append({"role": "assistant", "content": f"{sm['text']}"})
-                
+                    scored_memory_lines.append({"role": "assistant", "content": f"[関連する過去の記憶]: {sm['text']}"})
+
         print("===scored memory===")
         print(scored_memory_lines)
         print("===memory===")

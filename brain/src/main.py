@@ -14,6 +14,7 @@ import websockets
 from server.protocol import parse_client_message, create_text_message
 import re
 from audiosink import MyAudioSink, VolumeMonitor
+import utils.tools.discord_tool as discord_tool
 
 
 logging.getLogger("discord").setLevel(logging.WARNING)
@@ -25,12 +26,12 @@ load_dotenv()
 token = os.getenv("DISCORD_BOT_TOKEN")
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
 reconnect_enabled = True  # 再接続フラグ。
-
 profile = UserProfileStore()
-
 text_response_queue = asyncio.Queue()
-
 last_channel_id = None
+last_voice_channel_id = None
+vc = None
+
 
 def remove_thoughts(text: str) -> str:
     pattern = r"<think>.*?</think>"
@@ -116,7 +117,8 @@ async def text_ws_receiver(ws):
         if message["type"] == "text_response":
             text_response_queue.put_nowait(message["payload"]["text"])
         elif message["type"] == "state":
-            print(f"text_ws_receiver AIState: {message['payload']['state']}")
+            # print(f"text_ws_receiver AIState: {message['payload']['state']}")
+            continue
         elif message["type"] == "emotion":
             print(f"text_ws_receiver emotion: {message['payload']['emotion']}")
         elif message["type"] == "error":
@@ -127,13 +129,61 @@ async def text_ws_receiver(ws):
         else:
             print(f"receive unknown message: message type is {message['type']}")
 
+async def discord_command_consumer():
+    """discord_command_queueのコンシューマ"""
+    global vc
+    while True:
+        if not fastapi.discord_command_queue:
+            await asyncio.sleep(1.0)
+            continue
+        command = await fastapi.discord_command_queue.get()
+        if command["type"] == "send_message":
+            if last_channel_id is not None:
+                channel = bot.get_channel(last_channel_id)
+                if channel is not None:
+                    await channel.send(command["text"])  # type: ignore[union-attr]
+        elif command["type"] == "join_voice":
+            if last_voice_channel_id is not None and not bot.voice_clients:
+                loop = asyncio.get_event_loop()
+                uri = "ws://localhost:8000/ws/voice"
+                ws = await websockets.connect(uri)
+                channel = bot.get_channel(last_voice_channel_id)
+                if channel is not None:
+                    vc = await channel.connect(cls=voice_recv.VoiceRecvClient)  # type: ignore[union-attr]
+                    sink = MyAudioSink(vc, ws, loop)
+                    vc.listen(sink)
+                    print("vc.listen 完了")
+                    bot.loop.create_task(receiver_task(ws, sink.play_queue, sink)) # BG
+                    bot.loop.create_task(player_task(sink.play_queue, vc, loop, sink)) #BG
+            else:
+                print("すでにvcに参加しています")
+
+        elif command["type"] == "leave_voice":
+            global reconnect_enabled
+            reconnect_enabled = False
+            if bot.voice_clients:
+                await bot.voice_clients[0].disconnect(force=True)
+
+
 # ========== Bot Events ==========
 @bot.event
 async def on_ready():
     global text_ws
     text_ws = await websockets.connect("ws://localhost:8000/ws/text")
     asyncio.create_task(text_ws_receiver(text_ws))
+    fastapi.discord_command_queue = asyncio.Queue()
+    discord_tool.init(asyncio.get_event_loop(), fastapi.discord_command_queue)
+    asyncio.create_task(discord_command_consumer())
     print('Logged in as Mashiro')
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    global last_voice_channel_id
+    if member.bot:
+        return
+    if after.channel is not None:
+        last_voice_channel_id = after.channel.id
+        
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -180,13 +230,15 @@ async def on_message(message: discord.Message):
 @bot.command()
 async def join(ctx):
     global reconnect_enabled
+    global vc
     reconnect_enabled = True
     uri = "ws://localhost:8000/ws/voice"
     ws = await websockets.connect(uri)
     channel = ctx.author.voice.channel
     loop = asyncio.get_event_loop()
 
-    async def connect_and_listen():
+    async def connect_and_listen() -> voice_recv.VoiceRecvClient:
+        global vc
         vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
         sink = MyAudioSink(vc, ws, loop)
         vc.listen(sink)
@@ -198,11 +250,11 @@ async def join(ctx):
     vc = await connect_and_listen()
 
     async def reconnect_loop():
-        nonlocal vc
+        global vc
         while reconnect_enabled:
             try:
                 await asyncio.sleep(1)
-                if not vc.is_connected() and reconnect_enabled:
+                if vc is not None and not vc.is_connected() and reconnect_enabled:
                     print("切断を検知。再接続を試みます...")
                     try:
                         try:
