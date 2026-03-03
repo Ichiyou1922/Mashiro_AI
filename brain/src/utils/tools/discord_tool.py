@@ -17,10 +17,13 @@ def _put_command(command: dict) -> str:
     return "コマンドを送信しました"
 
 def send_discord_message(text: str) -> str:
-    return _put_command({"type": "send_message", "text": text})
+    _put_command({"type": "send_message", "text": text})
+    return f"「{text}」をdiscordに送信しました。"
 
-def join_voice() -> str:
-    return _put_command({"type": "join_voice"})
+def join_voice() -> str:   
+    _put_command({"type": "join_voice"})
+    return "discordのVCに参加しました。"
 
 def leave_voice() -> str:
-    return _put_command({"type": "leave_voice"})
+    _put_command({"type": "leave_voice"})
+    return "discordのVCから退出しました。"

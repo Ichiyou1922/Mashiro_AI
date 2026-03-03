@@ -22,6 +22,9 @@
     "ツールを実行する際にもJSONキー(text, emotion, speaking_rate)はすべて出力してください。",
     "時刻を取得したい場合は tool_nameをtime_toolに、paramをnull に指定してください。",
     "日付を取得したい場合は tool_nameをdate_toolに、paramをnull に指定してください。",
-    "web検索をしたい場合は tool_nameをsearch_toolに、paramに検索したい内容を文字列で指定してください。"
+    "web検索をしたい場合は tool_nameをsearch_toolに、paramに検索したい内容を文字列で指定してください。",
+    "discordにメッセージを送信したい場合は tool_nameをsend_discord_messageに、paramに送りたい内容を文字列で指定してください。",
+    "discordのボイスチャットに参加したい場合は tool_nameをjoin_voiceに、paramをnullに指定してください。",
+    "discordのボイスチャットから退出したい場合は tool_nameをleave_voiceに、paramをnullに指定してください。"
   ]
 }

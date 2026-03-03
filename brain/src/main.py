@@ -25,12 +25,14 @@ load_dotenv()
 
 token = os.getenv("DISCORD_BOT_TOKEN")
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
-reconnect_enabled = True  # 再接続フラグ。
 profile = UserProfileStore()
 text_response_queue = asyncio.Queue()
 last_channel_id = None
 last_voice_channel_id = None
 vc = None
+voice_ws = None
+voice_tasks: list[asyncio.Task] = []
+current_sink: MyAudioSink | None = None
 
 
 def remove_thoughts(text: str) -> str:
@@ -66,7 +68,7 @@ async def receiver_task(ws, play_queue: asyncio.Queue, sink: MyAudioSink):
                     print(f"receive error: {message['payload']['message']}")
                     continue
         except Exception as e:
-            print(f"receiver_task error: {e}")
+            print(f"receiver_task error: {type(e).__name__}: {e}")
             break
 
 
@@ -131,7 +133,7 @@ async def text_ws_receiver(ws):
 
 async def discord_command_consumer():
     """discord_command_queueのコンシューマ"""
-    global vc
+    global vc, voice_ws, voice_tasks, current_sink
     while True:
         if not fastapi.discord_command_queue:
             await asyncio.sleep(1.0)
@@ -143,26 +145,23 @@ async def discord_command_consumer():
                 if channel is not None:
                     await channel.send(command["text"])  # type: ignore[union-attr]
         elif command["type"] == "join_voice":
-            if last_voice_channel_id is not None and not bot.voice_clients:
+            await _cleanup_voice()
+            if last_voice_channel_id is not None:
                 loop = asyncio.get_event_loop()
                 uri = "ws://localhost:8000/ws/voice"
-                ws = await websockets.connect(uri)
+                voice_ws = await websockets.connect(uri, ping_interval=None)
                 channel = bot.get_channel(last_voice_channel_id)
                 if channel is not None:
                     vc = await channel.connect(cls=voice_recv.VoiceRecvClient)  # type: ignore[union-attr]
-                    sink = MyAudioSink(vc, ws, loop)
+                    sink = MyAudioSink(vc, voice_ws, loop)
+                    current_sink = sink
                     vc.listen(sink)
                     print("vc.listen 完了")
-                    bot.loop.create_task(receiver_task(ws, sink.play_queue, sink)) # BG
-                    bot.loop.create_task(player_task(sink.play_queue, vc, loop, sink)) #BG
-            else:
-                print("すでにvcに参加しています")
+                    voice_tasks.append(bot.loop.create_task(receiver_task(voice_ws, sink.play_queue, sink)))
+                    voice_tasks.append(bot.loop.create_task(player_task(sink.play_queue, vc, loop, sink)))
 
         elif command["type"] == "leave_voice":
-            global reconnect_enabled
-            reconnect_enabled = False
-            if bot.voice_clients:
-                await bot.voice_clients[0].disconnect(force=True)
+            await _cleanup_voice()
 
 
 # ========== Bot Events ==========
@@ -227,64 +226,60 @@ async def on_message(message: discord.Message):
             await message.reply(reply)
 
 # ========== Bot Commands ==========
+async def _cleanup_voice() -> None:
+    """古い音声接続を全てクリーンアップする"""
+    global vc, voice_ws, voice_tasks, current_sink
+
+    # タスクをキャンセル
+    for task in voice_tasks:
+        task.cancel()
+    voice_tasks.clear()
+
+    # sink のバックグラウンドタスクをキャンセル
+    if current_sink is not None:
+        current_sink.bg_task.cancel()
+        current_sink.queue_task.cancel()
+        current_sink = None
+
+    # WebSocket を閉じる
+    if voice_ws is not None:
+        try:
+            await voice_ws.close()
+        except Exception:
+            pass
+        voice_ws = None
+
+    # Discord VC を切断
+    if vc is not None and vc.is_connected():
+        try:
+            await vc.disconnect(force=True)
+        except Exception:
+            pass
+    vc = None
+
 @bot.command()
 async def join(ctx):
-    global reconnect_enabled
-    global vc
-    reconnect_enabled = True
+    global vc, voice_ws, voice_tasks, current_sink
+
+    await _cleanup_voice()
+
     uri = "ws://localhost:8000/ws/voice"
-    ws = await websockets.connect(uri)
+    voice_ws = await websockets.connect(uri, ping_interval=None)
     channel = ctx.author.voice.channel
     loop = asyncio.get_event_loop()
 
-    async def connect_and_listen() -> voice_recv.VoiceRecvClient:
-        global vc
-        vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
-        sink = MyAudioSink(vc, ws, loop)
-        vc.listen(sink)
-        print("vc.listen 完了")
-        bot.loop.create_task(receiver_task(ws, sink.play_queue, sink)) # BG
-        bot.loop.create_task(player_task(sink.play_queue, vc, loop, sink)) #BG
-        return vc
-
-    vc = await connect_and_listen()
-
-    async def reconnect_loop():
-        global vc
-        while reconnect_enabled:
-            try:
-                await asyncio.sleep(1)
-                if vc is not None and not vc.is_connected() and reconnect_enabled:
-                    print("切断を検知。再接続を試みます...")
-                    try:
-                        try:
-                            await vc.disconnect(force=True)
-                        except:
-                            pass
-                        await asyncio.sleep(2)
-                        vc = await connect_and_listen()
-                        print("再接続完了！")
-                    except Exception as e:
-                        print(f"再接続失敗: {e}")
-                        await asyncio.sleep(5)
-            except asyncio.CancelledError:
-                print("再接続ループを終了します")
-                break
-            except Exception as e:
-                print(f"再接続ループでエラー: {e}")
-                if not reconnect_enabled:
-                    break
-
-    bot.loop.create_task(reconnect_loop())
+    vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
+    sink = MyAudioSink(vc, voice_ws, loop)
+    current_sink = sink
+    vc.listen(sink)
+    print("vc.listen 完了")
+    voice_tasks.append(bot.loop.create_task(receiver_task(voice_ws, sink.play_queue, sink)))
+    voice_tasks.append(bot.loop.create_task(player_task(sink.play_queue, vc, loop, sink)))
 
 @bot.command()
-async def leave(ctx):
-    global reconnect_enabled
-    reconnect_enabled = False
-
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-        print("正常に切断しました")
+async def leave(_ctx):
+    await _cleanup_voice()
+    print("正常に切断しました")
 
 @bot.command()
 async def callme(ctx, name: str):

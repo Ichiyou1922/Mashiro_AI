@@ -89,27 +89,30 @@ class TicTacToe(GameBase):
 """
     
     async def get_available_actions(self):
-        cells = await self.page.query_selector_all(".space")
-        board = {}
-        for cell in cells:
-            class_attr = await cell.get_attribute("class")
-            text = await cell.text_content()
-            if class_attr:
-                classes = class_attr.split()
-            col = int( [c for c in classes if c.startswith("c")][0][1:] )
-            row = int( [c for c in classes if c.startswith("r")][0][1:] )
+        if self.page:
+            cells = await self.page.query_selector_all(".space")
+            board = {}
+            for cell in cells:
+                class_attr = await cell.get_attribute("class")
+                text = await cell.text_content()
+                if class_attr:
+                    classes = class_attr.split()
+                col = int( [c for c in classes if c.startswith("c")][0][1:] )
+                row = int( [c for c in classes if c.startswith("r")][0][1:] )
 
-            # 行・列から1 ~ 9 に変換
-            cell_num = (row - 1) * 3 + col
-            board[cell_num] = text.strip() if text.strip() else "_"
-        available = [str(k) for k in board if board[k] == "_"]
-        return available
+                # 行・列から1 ~ 9 に変換
+                cell_num = (row - 1) * 3 + col
+                if text:
+                    board[cell_num] = text.strip() if text.strip() else "_"
+            available = [str(k) for k in board if board[k] == "_"]
+            return available
 
     async def execute_action(self, action: str):
         cell_num = int(action)
         row = (cell_num -1) // 3 + 1
         col = (cell_num -1) % 3 + 1
-        await self.page.click(f".c{col}.r{row}")
+        if self.page:
+            await self.page.click(f".c{col}.r{row}")
 
 
 if __name__ == "__main__":

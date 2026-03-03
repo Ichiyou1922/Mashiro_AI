@@ -279,7 +279,7 @@ async def autonomy_loop(websocket: WebSocket, text_queue: asyncio.Queue):
     global godot_queue
     global importance_counter
 
-    boredom_threshold = 10.0
+    boredom_threshold = 30.0
     check_interval = 1.0
 
     print("Autonomy Loop Started.")
