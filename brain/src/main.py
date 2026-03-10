@@ -271,8 +271,11 @@ async def join(ctx):
     vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
     sink = MyAudioSink(vc, voice_ws, loop)
     current_sink = sink
-    vc.listen(sink)
-    print("vc.listen 完了")
+    try:
+        vc.listen(sink)
+        print("vc.listen 完了")
+    except Exception as e:
+        print(f"vc.listen error: {e}")
     voice_tasks.append(bot.loop.create_task(receiver_task(voice_ws, sink.play_queue, sink)))
     voice_tasks.append(bot.loop.create_task(player_task(sink.play_queue, vc, loop, sink)))
 
