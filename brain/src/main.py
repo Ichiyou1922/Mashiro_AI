@@ -17,8 +17,15 @@ from audiosink import MyAudioSink, VolumeMonitor
 import utils.tools.discord_tool as discord_tool
 
 
-logging.getLogger("discord").setLevel(logging.WARNING)
-logging.getLogger("discord.ext.voice_recv").setLevel(logging.WARNING)
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+)
+# voice接続デバッグ用: discord内部ログをDEBUGに
+logging.getLogger("discord.voice_client").setLevel(logging.DEBUG)
+logging.getLogger("discord.voice_state").setLevel(logging.DEBUG)
+logging.getLogger("discord.gateway").setLevel(logging.DEBUG)
+logging.getLogger("discord.ext.voice_recv").setLevel(logging.DEBUG)
 os.environ["AV_LOG_LEVEL"] = "quiet"
 
 load_dotenv()
@@ -153,6 +160,11 @@ async def discord_command_consumer():
                 channel = bot.get_channel(last_voice_channel_id)
                 if channel is not None:
                     vc = await channel.connect(cls=voice_recv.VoiceRecvClient)  # type: ignore[union-attr]
+                    if not vc.is_connected():
+                        print(f"[ERROR] VC接続失敗 (autonomous): state={vc._connection.state}")
+                        await _cleanup_voice()
+                        continue
+                    print(f"VC接続成功 (autonomous): state={vc._connection.state}")
                     sink = MyAudioSink(vc, voice_ws, loop)
                     current_sink = sink
                     vc.listen(sink)
@@ -249,8 +261,8 @@ async def _cleanup_voice() -> None:
             pass
         voice_ws = None
 
-    # Discord VC を切断
-    if vc is not None and vc.is_connected():
+    # Discord VC を切断 (接続失敗時もforce=Trueで確実にクリーンアップ)
+    if vc is not None:
         try:
             await vc.disconnect(force=True)
         except Exception:
@@ -269,13 +281,18 @@ async def join(ctx):
     loop = asyncio.get_event_loop()
 
     vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
+
+    if not vc.is_connected():
+        print(f"[ERROR] VC接続失敗: state={vc._connection.state}")
+        await _cleanup_voice()
+        await ctx.reply("ボイスチャンネルへの接続に失敗しました。もう一度試してください。")
+        return
+
+    print(f"VC接続成功: state={vc._connection.state}")
     sink = MyAudioSink(vc, voice_ws, loop)
     current_sink = sink
-    try:
-        vc.listen(sink)
-        print("vc.listen 完了")
-    except Exception as e:
-        print(f"vc.listen error: {e}")
+    vc.listen(sink)
+    print("vc.listen 完了")
     voice_tasks.append(bot.loop.create_task(receiver_task(voice_ws, sink.play_queue, sink)))
     voice_tasks.append(bot.loop.create_task(player_task(sink.play_queue, vc, loop, sink)))
 

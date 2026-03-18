@@ -91,18 +91,18 @@ class STTEngine:
         bytesio = io.BytesIO()
         wavfile.write(bytesio, 16000, int_data)
         bytesio.seek(0)
-        
+
         transcription = self.client.audio.transcriptions.create(
             file=("audio.wav", bytesio, "audio/wav"),
             model="whisper-large-v3-turbo",
-            prompt="えーと、あー、うーん等のフィラーも含めて書き起こしてください。「ましろ」という人名が出るので注意してください。",   
-            response_format="json",                 
-            language="ja",                          
-            temperature=0.0,       
+            prompt="えーと、あー、うーん等のフィラーも含めて書き起こしてください。「ましろ」という人名が出るので注意してください。",
+            response_format="json",
+            language="ja",
+            temperature=0.0,
 
         )
         if transcription.text in self.hallucinationTexts:
             return
-            
+
         return transcription.text.strip()
     

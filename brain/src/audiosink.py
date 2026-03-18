@@ -8,6 +8,15 @@ from server.protocol import create_state_message, create_interrupt_message
 from core.vad_engine import VADEngine
 import struct
 import json
+import logging
+
+try:
+    import davey
+    _has_davey = True
+except ImportError:
+    _has_davey = False
+
+log = logging.getLogger(__name__)
 
 # ========== Custom AudioSource =========
 class VolumeMonitor(discord.AudioSource):
@@ -78,7 +87,38 @@ class MyAudioSink(voice_recv.AudioSink):
         print("MyAudioSink __init__ 完了")
 
     def wants_opus(self) -> bool:
-        return False
+        # True にすることで PacketRouter の opus decode をスキップし、
+        # DAVE復号 + opus decode を自前で行う
+        return True
+
+    def _dave_decrypt(self, user_id: int, data: bytes) -> bytes:
+        """DAVE E2EE 復号。davey未対応またはセッション未確立時はそのまま返す。"""
+        if not _has_davey:
+            return data
+        dave_session = getattr(self.vc._connection, 'dave_session', None)
+        if dave_session is None:
+            return data
+        try:
+            result = dave_session.decrypt(user_id, davey.MediaType.audio, data)
+            if result is not None:
+                return bytes(result)
+        except Exception:
+            # passthrough mode を試行
+            try:
+                dave_session.set_passthrough_mode(True, 50)
+                result = dave_session.decrypt(user_id, davey.MediaType.audio, data)
+                if result is not None:
+                    return bytes(result)
+            except Exception:
+                pass
+        return data
+
+    def _get_opus_decoder(self, user_key: str) -> discord.opus.Decoder:
+        """ユーザーごとの Opus Decoder を取得（なければ生成）。"""
+        if "opus_decoder" not in self.user_data.get(user_key, {}):
+            # user_data 初期化前に呼ばれた場合は一時的に作る
+            return discord.opus.Decoder()
+        return self.user_data[user_key]["opus_decoder"]
 
     async def process_queue_loop(self):
         """キューから音声データを取り出して順番に処理するワーカー"""
@@ -140,9 +180,10 @@ class MyAudioSink(voice_recv.AudioSink):
             if self.ai_state == "speaking" or self.is_processing:
                 return
 
-            # data.pcmは bytes型のPCMデータ
-            if not hasattr(data, 'pcm'):
-                print(f"Error: Data has no .pcm attribute. Type: {type(data)}")
+            # wants_opus=True なので pcm は None
+            # data.packet.decrypted_data からDAVE復号 → opus decode でPCMを得る
+            raw_opus = getattr(data.packet, 'decrypted_data', None) if hasattr(data, 'packet') else None
+            if raw_opus is None:
                 return
 
             user_key = str(user.id)
@@ -156,8 +197,17 @@ class MyAudioSink(voice_recv.AudioSink):
                     "tick": 0,
                     "is_speaking": False,
                     "last_seen": current_time,
-                    "user": user  # userオブジェクトを保存
+                    "user": user,
+                    "opus_decoder": discord.opus.Decoder(),
                 }
+
+            # DAVE復号 → opus decode → PCM
+            opus_data = self._dave_decrypt(user.id, raw_opus)
+            try:
+                pcm = self.user_data[user_key]["opus_decoder"].decode(opus_data, fec=False)
+            except discord.opus.OpusError:
+                # 壊れたパケットはスキップ（接続は維持）
+                return
 
             # パケット受信のたびにlast_seenとuserを更新
             self.user_data[user_key]["last_seen"] = current_time
@@ -167,12 +217,12 @@ class MyAudioSink(voice_recv.AudioSink):
 
             # データをバッファに溜める
             if self.user_data[user_key]["tick"] < CHUNK_LIMIT:
-                self.user_data[user_key]["small_buffer"].append(data.pcm)
+                self.user_data[user_key]["small_buffer"].append(pcm)
                 self.user_data[user_key]["tick"] += 1
 
             else:
                 # 溜まったbytesを結合してVAD判定
-                self.user_data[user_key]["small_buffer"].append(data.pcm)
+                self.user_data[user_key]["small_buffer"].append(pcm)
                 big_buffer = b"".join(self.user_data[user_key]["small_buffer"])
                 self.user_data[user_key]["small_buffer"].clear()
                 self.user_data[user_key]["tick"] = 0
