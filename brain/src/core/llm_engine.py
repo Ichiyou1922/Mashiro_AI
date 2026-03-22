@@ -18,7 +18,7 @@ CONFIG_PATH = ROOT_DIR / "config"
 load_dotenv()
 
 config_name = "mashiro_config_v4.json"
-model_name = "mashiro_v10.gguf"
+model_name = "mashiro_v11_q4_k_m.gguf"
 MASHIRO_ID = int(os.getenv("MASHIRO_ID", "0"))
 
 class LLMEngine:
@@ -52,14 +52,15 @@ class LLMEngine:
         )
         self.llm_model = Llama(
             model_path=self.llm_path,
-            n_gpu_layers=-1, # -1だと全レイヤーをGPUに
+            n_gpu_layers=30, # -1だと全レイヤーをGPUに
             n_ctx=n_ctx,
             # cache_type_k="q4_0",
             # cache_type_v="q4_0",
             # chat_format = "qwen",
-            chat_format="llama-3",
+            # chat_format="chatml",
+            chat_format="qwen",
             flash_attn=True,
-                verbose=False
+            verbose=False
         )
 
         print(f"LLM 準備完了")
@@ -69,12 +70,13 @@ class LLMEngine:
         response = cast(dict[str, Any], self.llm_model.create_chat_completion(
             messages=cast(List[Any], messages),
             max_tokens=1024,
-            temperature=1.0,
-            #top_k=64,
-            #top_p=0.95,
-            repeat_penalty=1.1,
-            frequency_penalty=0.3,
-            presence_penalty=0.2,
+            temperature=1.1,
+            top_k=20,
+            top_p=0.95,
+            min_p=0.0,
+            present_penalty=1.5,
+            repeat_penalty=1.2,
+            # frequency_penalty=0.3,
             stream=False,
             response_format=response_format,
             stop=[
@@ -355,6 +357,8 @@ Name: {config['name']}
     "speaking_rate": 1.0,
     "function": {{"tool_name": "search_tool", "param": "検索したい内容"}}
 }}
+
+/no_think
 """
         return prompt.strip()
 

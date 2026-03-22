@@ -17,15 +17,17 @@ from audiosink import MyAudioSink, VolumeMonitor
 import utils.tools.discord_tool as discord_tool
 
 
-logging.basicConfig(
-    level=logging.WARNING,
-    format="%(asctime)s %(name)s %(levelname)s: %(message)s",
-)
-# voice接続デバッグ用: discord内部ログをDEBUGに
-logging.getLogger("discord.voice_client").setLevel(logging.DEBUG)
-logging.getLogger("discord.voice_state").setLevel(logging.DEBUG)
-logging.getLogger("discord.gateway").setLevel(logging.DEBUG)
-logging.getLogger("discord.ext.voice_recv").setLevel(logging.DEBUG)
+logging.getLogger("discord").setLevel(logging.WARNING)
+logging.getLogger("discord.ext.voice_recv").setLevel(logging.WARNING)
+# DAVE接続デバッグ時はこちらを有効化:
+# logging.basicConfig(
+#     level=logging.WARNING,
+#     format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+# )
+# logging.getLogger("discord.voice_client").setLevel(logging.DEBUG)
+# logging.getLogger("discord.voice_state").setLevel(logging.DEBUG)
+# logging.getLogger("discord.gateway").setLevel(logging.DEBUG)
+# logging.getLogger("discord.ext.voice_recv").setLevel(logging.DEBUG)
 os.environ["AV_LOG_LEVEL"] = "quiet"
 
 load_dotenv()
