@@ -22,5 +22,6 @@ __pycache__/
 .env.*
 CLAUDE.md
 HANDOFF.md
+docs/
 brain/google_tts_key.json
 Plan/
